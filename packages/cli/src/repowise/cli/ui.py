@@ -219,7 +219,23 @@ def print_scan_summary(console: Console, scan: RepoScanInfo) -> None:
         lang_parts.append(f"+{len(source_langs) - 4} more")
     lang_line = ", ".join(lang_parts) if lang_parts else "no source files detected"
 
-    body = f"  {header_line}\n  [dim]{lang_line}[/dim]"
+    # Rough wall-time estimate so users know what they're committing to.
+    # Calibrated against ~700-file Python+TS repos: traverse+parse+graph
+    # comes in around 2 min/1k source files, plus ~1 min/100 LLM pages.
+    # We surface a range, not a point, to set honest expectations.
+    src_files = sum(source_langs.values()) or scan.total_files
+    ingest_min = max(1, round(src_files / 500))
+    ingest_max = max(2, round(src_files / 250))
+    eta_line = (
+        f"~{ingest_min}-{ingest_max} min ingestion"
+        " · LLM generation depends on model + page count"
+    )
+
+    body = (
+        f"  {header_line}\n"
+        f"  [dim]{lang_line}[/dim]\n"
+        f"  [dim]{eta_line}[/dim]"
+    )
 
     console.print(
         Panel(
@@ -490,12 +506,38 @@ def interactive_provider_select(
 
     # --- model ---
     default_model = _PROVIDER_DEFAULTS.get(chosen, "")
+    if not model_flag:
+        console.print(
+            "  [dim]↳ Smaller is fine — repowise is calibrated for "
+            "flash-lite / nano / haiku / 8B-class ollama. Bigger models "
+            "don't improve doc quality.[/]"
+        )
     model = model_flag or click.prompt(
         "  Model",
         default=default_model,
     )
 
+    if not model_flag and _is_flagship_model(model):
+        console.print(
+            f"  [{WARN}]Note:[/] [dim]'{model}' works, but flash-lite / haiku / "
+            "nano produce equivalent docs at ~10x lower cost on most repos.[/]"
+        )
+
     return chosen, model
+
+
+_FLAGSHIP_MODEL_TOKENS = (
+    "opus", "gpt-4o", "gpt-5", "-pro", "sonnet-4-7", "sonnet-4-6",
+    "ultra", "o1", "o3",
+)
+
+
+def _is_flagship_model(model: str) -> bool:
+    """Heuristic: True if the model name suggests a flagship-tier model."""
+    if not model:
+        return False
+    m = model.lower()
+    return any(tok in m for tok in _FLAGSHIP_MODEL_TOKENS)
 
 
 def _prompt_api_key(
@@ -610,15 +652,18 @@ def interactive_advanced_config(
     console.print("  [dim]Gitignore-style patterns, comma-separated or one per line.[/dim]")
     console.print("  [dim]Press Enter with empty input to finish.[/dim]")
     patterns: list[str] = []
+    seen_patterns: set[str] = set()
     while True:
         raw = click.prompt("  Pattern", default="", show_default=False)
         raw = raw.strip()
         if not raw:
             break
-        # Support comma-separated input
+        # Support comma-separated input; dedupe so re-pasting / re-entering
+        # the same suggestions doesn't bloat the summary panel.
         for part in raw.split(","):
             part = part.strip()
-            if part:
+            if part and part not in seen_patterns:
+                seen_patterns.add(part)
                 patterns.append(part)
     result["exclude"] = tuple(patterns)
 
@@ -681,7 +726,7 @@ def interactive_advanced_config(
     )
 
     result["test_run"] = click.confirm(
-        "  Test run? (limit to top 10 files for quick validation)",
+        "  Test run? (full ingestion; LLM page generation limited to top 10 files for quick validation)",
         default=False,
     )
 
@@ -699,7 +744,11 @@ def interactive_advanced_config(
     summary.add_row("Concurrency", str(result["concurrency"]))
     summary.add_row("Embedder", result["embedder"])
     if patterns:
-        summary.add_row("Exclude", ", ".join(patterns))
+        if len(patterns) <= 5:
+            summary.add_row("Exclude", ", ".join(patterns))
+        else:
+            # Bullet-list when many patterns — comma-joined wraps unreadably.
+            summary.add_row("Exclude", "\n".join(f"• {p}" for p in patterns))
     summary.add_row("Test run", "yes" if result["test_run"] else "no")
 
     console.print(
@@ -1113,6 +1162,25 @@ class RichProgressCallback:
     def on_item_done(self, phase: str) -> None:
         if phase in self._tasks:
             self._progress.advance(self._tasks[phase])
+
+    def on_phase_done(self, phase: str) -> None:
+        """Mark a phase task as fully complete and hide it from the live
+        display, so the phase-summary lines that follow aren't interleaved
+        with stale progress bars (issue: phantom/duplicated progress bars).
+        """
+        task_id = self._tasks.get(phase)
+        if task_id is None:
+            return
+        try:
+            task = next(
+                (t for t in self._progress.tasks if t.id == task_id), None
+            )
+            if task is not None and task.total is not None:
+                self._progress.update(task_id, completed=task.total, visible=False)
+            else:
+                self._progress.update(task_id, visible=False)
+        except Exception:
+            pass
 
     def on_message(self, level: str, text: str) -> None:
         style_map = {"info": OK, "warning": WARN, "error": ERR}
