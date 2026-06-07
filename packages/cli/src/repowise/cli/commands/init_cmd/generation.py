@@ -46,18 +46,23 @@ class CostGateDeclined(Exception):  # noqa: N818 — a control-flow signal, not 
 
 
 def confirm_cost_gate(message: str) -> bool:
-    """Render the cost-gate ``[y/N]`` prompt with visual padding.
+    """Render the cost-gate ``[Y/n]`` prompt with visual padding.
 
     Click's plain ``confirm`` interleaves with the trailing line of any
     prior Rich output (progress-bar frames, status spinners), making the
-    ``[y/N]`` glyphs hard to spot — users have walked past it and approved
+    confirm glyphs hard to spot — users have walked past it and approved
     a $14 bill thinking they were still in cost-estimate territory. A
     blank line + horizontal rule cleanly separates the prompt from
     whatever was printed above it.
+
+    Default is Yes: the user just picked a coverage tier with the cost
+    range printed next to it, so Enter-through should continue the run
+    they configured — the gate exists to make the spend visible, not to
+    interrupt it.
     """
     console.line()
     console.rule(style="yellow")
-    return click.confirm(message, default=False)
+    return click.confirm(message, default=True)
 
 
 def cost_gate_declined(est: Any, *, yes: bool, message: str) -> bool:
@@ -244,6 +249,12 @@ def run_repo_generation(
     # accept ``_cost_tracker`` as an attribute).
     cost_tracker = build_cost_tracker(repo_path, result.repo_name)
     provider._cost_tracker = cost_tracker
+
+    if verbose:
+        console.print(
+            "  [dim](each generated page is saved as it completes — safe to Ctrl-C, "
+            "then run 'repowise init --resume' to pick up where it stopped)[/dim]"
+        )
 
     with Progress(
         SpinnerColumn(spinner_name=OWL_SPINNER, style=BRAND_STYLE),
