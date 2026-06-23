@@ -63,7 +63,11 @@ analysis/health/
 ├── __init__.py                     # public API: HealthAnalyzer, HealthReport
 ├── engine.py                       # orchestrator: walker → biomarkers → scorer
 ├── scoring.py                      # weighted aggregation, category caps, KPIs
-├── trends.py                       # snapshot diff, Declining/Predicted alerts
+├── grading.py                      # 3 defect-backed bands + NLOC-weighted distribution
+├── defect_accuracy.py              # "does the score find the bugs?" self-validation
+├── trends.py                       # snapshot diff, Declining/Predicted alerts, per-file score series
+├── signals.py                      # per-file process/people/topology join (surfacing-only)
+├── churn_complexity.py             # churn × complexity scatter points (surfacing-only)
 ├── suggestions.py                  # deterministic refactoring text per biomarker
 ├── config.py                       # HealthConfig + .repowise/health-rules.json
 ├── models.py                       # HealthFindingData, HealthFileMetricData, HealthReport
@@ -173,7 +177,11 @@ packages/ui/src/health/             # shared React components (used by web + fut
 ├── untested-hotspot-warning.tsx
 ├── refactoring-card.tsx
 ├── refactoring-target-list.tsx
-├── health-badge.tsx
+├── health-badge.tsx               # score pill, colored by the 3 health bands
+├── health-distribution-bar.tsx    # NLOC-weighted Alert/Warning/Healthy split
+├── trend-chart.tsx                # repo KPI history (3 series)
+├── file-trend-chart.tsx           # single file's score-over-time + delta + declining flag
+├── sparkline.tsx                  # compact inline series (drawer trend)
 └── module-rollup-list.tsx
 
 packages/web/src/app/repos/[id]/health/
@@ -201,6 +209,8 @@ tests/unit/health/                  # 99+ tests
 ├── test_scoring_snapshot.py        # stability snapshot — locks caps + deductions
 ├── test_health_config.py           # .repowise/health-rules.json
 ├── test_trends.py                  # diff_snapshots, declining/predicted alerts
+├── test_signals.py                 # file_signals join + no-signal/normalization
+├── test_churn_complexity.py        # churn × complexity point shaping + sort + filtering
 └── test_suggestions.py
 
 tests/integration/
@@ -534,6 +544,45 @@ alerts:
 `recent_kpis(history, limit=10)` returns a newest-first serialised view
 for the CLI table and MCP `get_health(include=["trend"])` response.
 
+### Per-file trajectory
+
+Snapshots also store a compact `{path: score}` map (`per_file_scores_json`),
+so the same window yields a single file's score-over-time series:
+
+- `file_score_series(history, path)` — oldest-first `FileTrendPoint`s,
+  skipping snapshots that don't carry the file. Returns `[]` below two
+  points (silent on thin history). This is the exact function the PR bot
+  reuses for its in-comment sparkline.
+- `file_trend(history, path)` — wraps the series with `current` / `previous`
+  / `delta` and a `declining` flag (the per-file mirror of the alerts above:
+  ≥ `DECLINE_THRESHOLD` below the lookback point, or
+  `PREDICTED_DECLINE_CONSECUTIVE` consecutive drops). `snapshot_count` is the
+  full window size so a young repo is distinguishable from a file missing in
+  older snapshots.
+
+Both are state-free; the server serialises `FileTrend` via
+`_file_trend_to_dict` and embeds it in the file-detail health block, the
+health-breakdown response, and the standalone trend route (§13).
+
+### Per-file signals (`signals.py`)
+
+The same state-free pattern, applied to the git-layer + topology fields we
+already persist but only buried inside biomarker detail cards (or omitted
+entirely). `file_signals(git_meta, degrees)` joins one `GitMetadata` row with
+the file's graph degree into a `FileSignals` grouped as **Process**
+(`prior_defect_count`, `change_entropy_pct` normalized 0-100, 90-day line
+churn, `age_days`), **People** (recent vs all-time owner + commit share), and
+**Topology** (`in_degree` / `out_degree`). No recompute — pure surfacing.
+
+The honesty rule mirrors the trend: a field is `None` only when its *source
+row* is absent (no git history → process/people silent; not a graph node →
+topology silent), never imputed; a genuine `prior_defect_count` of `0` is kept
+as a real signal. The server serialises it via `_file_signals_to_dict` and
+embeds it in the file-detail health block and the breakdown response (§13); MCP
+attaches a null-dropped copy to the `get_context` health block (§12). Mirrored
+as `FileSignals` in `@repowise-dev/types/health`; rendered by the shared
+`file-signals-panel.tsx` in both the drawer and the file-page Health tab.
+
 ---
 
 ## 9. Incremental analysis — the `repowise update` path
@@ -657,12 +706,15 @@ silently re-scored for changed files only.
 
 Defined in `tool_health.py`. Modes:
 
-- **Dashboard mode** (`targets=None`) — returns repo-level KPIs +
+- **Dashboard mode** (`targets=None`) — returns repo-level KPIs (with the
+  repo `band`) + the NLOC-weighted `distribution` across the 3 bands +
   `worst_files` (top N lowest-scoring) + `top_findings` + a per-module
   `modules` rollup.
 - **Targeted mode** (`targets=[...]`) — returns full `metrics` +
-  `findings` for the listed paths. Targets prefixed `module:foo` expand
-  to the file set in that module.
+  `findings` for the listed paths, plus a per-file `trends` block (compact
+  score series + `current` + `delta` + `declining`) for any target with at
+  least two snapshots of history. Targets prefixed `module:foo` expand to
+  the file set in that module.
 
 `include` flags layer richer data:
 
@@ -679,9 +731,10 @@ Defined in `tool_health.py`. Modes:
   `top_biomarkers`, `coverage_pct`, `branch_coverage_pct`.
 - `get_context(targets, include=["health"])` — per-file `score`,
   `max_ccn`, `max_nesting`, `nloc`, `module`, `duplication_pct`, top
-  2 biomarkers (each with a `suggestion` string), and coverage block.
-- `get_overview()` — adds a `code_health` block: avg, hotspot, worst
-  performer, open finding count.
+  2 biomarkers (each with a `suggestion` string), a coverage block, and a
+  null-dropped `signals` block (process/people/topology — see §8).
+- `get_overview()` — adds a `code_health` block: avg, repo `band`, hotspot,
+  worst performer, open finding count, and the NLOC-weighted `distribution`.
 
 Every response carries the standard `_meta` envelope via `build_meta()`.
 
@@ -694,12 +747,18 @@ Every response carries the standard `_meta` envelope via `build_meta()`.
 
 | Route | Returns |
 |---|---|
-| `GET /overview` | summary + lowest-scoring files + top findings + module rollup |
+| `GET /overview` | summary (with repo `band`) + `distribution` + lowest-scoring files + top findings + module rollup |
+| `GET /badge.svg` | self-rendered flat SVG health badge (color + `N.N/10`, no letter) |
+| `GET /badge.json` | Shields.io endpoint-badge payload (`schemaVersion`/`label`/`message`/`color`/`band`) |
 | `GET /files` | per-file metrics |
+| `GET /files/breakdown` | one file's metric + score breakdown + findings + suggestions + per-file `trend` + `signals` |
+| `GET /files/trend` | one file's score-over-time series + current delta + `declining` flag (`?file_path=`) |
+| `GET /trend` | repo KPI history + alerts + last-two-snapshot per-file deltas |
 | `GET /findings` | findings list (filterable by biomarker_type, severity, file_path) |
 | `GET /coverage` | coverage summary + per-file rows |
 | `POST /coverage` | ingest a coverage report (used by some CI integrations) |
 | `GET /refactoring-targets` | ranked by `total_impact / effort_bucket` |
+| `GET /churn-complexity` | churn × complexity scatter points (one per churned file: `commit_count_90d`, `max_ccn`, `nloc`, `score`, `churn_percentile`) |
 | `GET /modules` | NLOC-weighted module rollup table |
 
 Auth is the standard `verify_api_key` dependency from
@@ -719,7 +778,10 @@ Three routes under `/repos/[id]/health/`:
 
 Plus a sidecar `HealthRisksPanel` on the Hotspots, Ownership, and Graph
 pages — surfaces the lowest-scoring files inline without touching the
-shared table/graph components.
+shared table/graph components. The **Hotspots & churn** tab carries the
+`ChurnComplexityQuadrant` (fed by `GET /churn-complexity`), toggleable in
+place with the existing churn × bus-factor scatter; the file Health tab
+carries the per-function "Functions by churn" blame table.
 
 All visual primitives live in `packages/ui/src/health/` so the hosted
 `frontend/` repo (separate git checkout) can reuse them — port is mostly
@@ -807,7 +869,9 @@ Other perf notes:
 | `tests/unit/health/test_coverage_parsers.py` | LCOV / Cobertura / Clover / repowise-JSON happy paths + edge cases |
 | `tests/unit/health/test_scoring.py` | Deduction caps, clamping, KPI math |
 | `tests/unit/health/test_scoring_snapshot.py` | **Stability guard** — caps, severity table, biomarker→category mapping, two known fixture scores |
-| `tests/unit/health/test_trends.py` | Declining + predicted alerts, ordering |
+| `tests/unit/health/test_trends.py` | Declining + predicted alerts, ordering, per-file series + `file_trend` |
+| `tests/unit/health/test_signals.py` | `file_signals` join — no-signal vs real-zero, entropy 0-1→0-100, owner handoff |
+| `tests/unit/health/test_churn_complexity.py` | `churn_complexity_points` — no-churn omission, complexity never filters, danger-product sort, percentile scaling |
 | `tests/unit/health/test_suggestions.py` | Suggestion strings keyed correctly |
 | `tests/unit/health/test_health_config.py` | `.repowise/health-rules.json` parsing + glob matching |
 | `tests/integration/test_health_coverage_integration.py` | End-to-end LCOV → analyzer → coverage_gap fires |
@@ -872,6 +936,13 @@ phases may revisit; the constraints kept v1 shippable.
   shipped surface: the `analysis/change_risk/` package behind
   `repowise risk` scores a commit or base..head range with a calibrated
   logistic model.)
+- **No letter grade.** The 1–10 score is the single number. The only
+  categorical layer is the 3 defect-backed bands (Healthy/Warning/Alert,
+  `grading.py`); a letter on top would be a third overlapping scale with
+  arbitrary cliffs. The legacy 4-step `scoreBand` in `ui/health/tokens.ts`
+  is retained only as a finer color ramp for file-table pills, not a
+  labeling scheme — surfaced band labels and the distribution use the 3
+  bands.
 
 ---
 

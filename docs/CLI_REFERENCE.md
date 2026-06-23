@@ -540,6 +540,25 @@ Re-scan the workspace directory for new repos not yet added.
 
 Change which repo is the default for MCP queries.
 
+### `repowise workspace diagnostics`
+
+Explain the cross-repo contract link count: per-repo provider/consumer counts, unmatched consumers grouped by reason, and orphan providers (declared but never consumed).
+
+```bash
+repowise workspace diagnostics            # human-readable report
+repowise workspace diagnostics --json     # raw JSON
+repowise workspace diagnostics --repo api # limit to one repo alias
+```
+
+### `repowise workspace check`
+
+Architecture lint: check the declared `conformance:` rules against the system graph and detect dependency cycles. Exits non-zero on any finding, so it gates CI.
+
+```bash
+repowise workspace check                  # human-readable report; exit 1 on findings
+repowise workspace check --json           # raw report JSON
+```
+
 See [Workspaces](WORKSPACES.md) for the full multi-repo guide.
 
 ---
@@ -715,6 +734,30 @@ be added later.)
 sizing), reports the omission store's size against its configured cap, and
 shows whether the command-rewrite hook is installed. The hook is opt-in, so
 its absence never fails doctor.
+
+---
+
+### `repowise whats-new`
+
+Show release notes for repowise versions you haven't seen yet. By default it
+lists releases newer than the last one you viewed, then records the current
+version as seen. Works offline from the changelog bundled with the install.
+
+| Flag | Description |
+|------|-------------|
+| `--version X.Y.Z` | Show notes for a single release |
+| `--all` | Show the full changelog history |
+
+```bash
+repowise whats-new                       # what changed since you last looked
+repowise whats-new --version 0.21.0      # one specific release
+repowise whats-new --all                 # full history
+```
+
+`repowise update` shows a short "what's new" panel automatically after you
+upgrade to a newer version, and both `update` and `serve` print a one-line,
+non-blocking notice when a newer release is available on PyPI. See
+[docs/UPGRADING.md](UPGRADING.md) for the full upgrade flow.
 
 ---
 

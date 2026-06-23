@@ -77,80 +77,86 @@ def _make_ws_config():
 def _make_enricher(tmp_path: Path) -> CrossRepoEnricher:
     """Build a real enricher with sample data."""
     cross_repo_path = tmp_path / "cross_repo_edges.json"
-    _write_json(cross_repo_path, {
-        "version": 1,
-        "co_changes": [
-            {
-                "source_repo": "backend",
-                "source_file": "api/routes.py",
-                "target_repo": "frontend",
-                "target_file": "src/client.ts",
-                "strength": 0.8,
-                "frequency": 5,
-                "last_date": "2026-04-10",
-            },
-        ],
-        "package_deps": [
-            {
-                "source_repo": "frontend",
-                "target_repo": "backend",
-                "source_manifest": "package.json",
-                "kind": "npm",
-            },
-        ],
-    })
+    _write_json(
+        cross_repo_path,
+        {
+            "version": 1,
+            "co_changes": [
+                {
+                    "source_repo": "backend",
+                    "source_file": "api/routes.py",
+                    "target_repo": "frontend",
+                    "target_file": "src/client.ts",
+                    "strength": 0.8,
+                    "frequency": 5,
+                    "last_date": "2026-04-10",
+                },
+            ],
+            "package_deps": [
+                {
+                    "source_repo": "frontend",
+                    "target_repo": "backend",
+                    "source_manifest": "package.json",
+                    "kind": "npm",
+                },
+            ],
+        },
+    )
 
     contracts_path = tmp_path / "contracts.json"
-    _write_json(contracts_path, {
-        "version": 1,
-        "generated_at": "2026-04-12T12:00:00Z",
-        "contracts": [
-            {
-                "repo": "backend",
-                "contract_id": "http::GET::/api/users",
-                "contract_type": "http",
-                "role": "provider",
-                "file_path": "routes.py",
-                "symbol_name": "get_users",
-                "confidence": 0.85,
-                "service": None,
-            },
-            {
-                "repo": "frontend",
-                "contract_id": "http::GET::/api/users",
-                "contract_type": "http",
-                "role": "consumer",
-                "file_path": "client.ts",
-                "symbol_name": "fetchUsers",
-                "confidence": 0.75,
-                "service": None,
-            },
-            {
-                "repo": "backend",
-                "contract_id": "grpc::Auth/Login",
-                "contract_type": "grpc",
-                "role": "provider",
-                "file_path": "auth.py",
-                "symbol_name": "Login",
-                "confidence": 0.85,
-                "service": None,
-            },
-        ],
-        "contract_links": [
-            {
-                "contract_id": "http::GET::/api/users",
-                "contract_type": "http",
-                "match_type": "exact",
-                "confidence": 0.75,
-                "provider_repo": "backend",
-                "provider_file": "routes.py",
-                "provider_symbol": "get_users",
-                "consumer_repo": "frontend",
-                "consumer_file": "client.ts",
-                "consumer_symbol": "fetchUsers",
-            },
-        ],
-    })
+    _write_json(
+        contracts_path,
+        {
+            "version": 1,
+            "generated_at": "2026-04-12T12:00:00Z",
+            "contracts": [
+                {
+                    "repo": "backend",
+                    "contract_id": "http::GET::/api/users",
+                    "contract_type": "http",
+                    "role": "provider",
+                    "file_path": "routes.py",
+                    "symbol_name": "get_users",
+                    "confidence": 0.85,
+                    "service": None,
+                },
+                {
+                    "repo": "frontend",
+                    "contract_id": "http::GET::/api/users",
+                    "contract_type": "http",
+                    "role": "consumer",
+                    "file_path": "client.ts",
+                    "symbol_name": "fetchUsers",
+                    "confidence": 0.75,
+                    "service": None,
+                },
+                {
+                    "repo": "backend",
+                    "contract_id": "grpc::Auth/Login",
+                    "contract_type": "grpc",
+                    "role": "provider",
+                    "file_path": "auth.py",
+                    "symbol_name": "Login",
+                    "confidence": 0.85,
+                    "service": None,
+                },
+            ],
+            "contract_links": [
+                {
+                    "contract_id": "http::GET::/api/users",
+                    "contract_type": "http",
+                    "match_type": "exact",
+                    "confidence": 0.75,
+                    "provider_repo": "backend",
+                    "provider_file": "routes.py",
+                    "provider_symbol": "get_users",
+                    "consumer_repo": "frontend",
+                    "consumer_file": "client.ts",
+                    "consumer_symbol": "fetchUsers",
+                },
+            ],
+        },
+    )
 
     return CrossRepoEnricher(cross_repo_path, contracts_path=contracts_path)
 
@@ -534,8 +540,7 @@ class TestQueryRepoStats:
             )
             for idx, (is_hotspot, churn) in enumerate(rows):
                 conn.execute(
-                    "INSERT INTO git_metadata (id, is_hotspot, churn_percentile) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT INTO git_metadata (id, is_hotspot, churn_percentile) VALUES (?, ?, ?)",
                     (f"src/f{idx}.py", is_hotspot, churn),
                 )
 
@@ -564,3 +569,387 @@ class TestQueryRepoStats:
         stats = workspace._query_repo_stats(db_path)
 
         assert stats["hotspot_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# GET /api/workspace/system-graph + /diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _make_system_graph_enricher(tmp_path: Path) -> CrossRepoEnricher:
+    """Enricher backed by a real, core-built system graph artifact."""
+    from repowise.core.workspace.contracts import Contract, ContractLink
+    from repowise.core.workspace.cross_repo import CrossRepoOverlay, CrossRepoPackageDep
+    from repowise.core.workspace.system_graph import build_system_graph
+
+    contracts = [
+        Contract(
+            repo="backend",
+            contract_id="http::GET::/api/users",
+            contract_type="http",
+            role="provider",
+            file_path="routes.py",
+            symbol_name="get_users",
+            confidence=0.85,
+        ),
+        Contract(
+            repo="frontend",
+            contract_id="http::GET::/api/users",
+            contract_type="http",
+            role="consumer",
+            file_path="client.ts",
+            symbol_name="fetchUsers",
+            confidence=0.75,
+        ),
+        Contract(
+            repo="backend",
+            contract_id="http::GET::/orphan",
+            contract_type="http",
+            role="provider",
+            file_path="routes.py",
+            symbol_name="orphan",
+            confidence=0.85,
+        ),
+    ]
+    links = [
+        ContractLink(
+            contract_id="http::GET::/api/users",
+            contract_type="http",
+            match_type="exact",
+            confidence=0.75,
+            provider_repo="backend",
+            provider_file="routes.py",
+            provider_symbol="get_users",
+            provider_service=None,
+            consumer_repo="frontend",
+            consumer_file="client.ts",
+            consumer_symbol="fetchUsers",
+            consumer_service=None,
+        ),
+    ]
+    overlay = CrossRepoOverlay(
+        package_deps=[
+            CrossRepoPackageDep(
+                source_repo="frontend",
+                target_repo="backend",
+                source_manifest="package.json",
+                kind="npm_local_path",
+            ),
+        ]
+    )
+    graph = build_system_graph(contracts, links, overlay, {}, generated_at="t")
+
+    _write_json(tmp_path / "system_graph.json", graph.to_dict())
+    return CrossRepoEnricher(
+        tmp_path / "cross_repo_edges.json",
+        system_graph_path=tmp_path / "system_graph.json",
+    )
+
+
+class TestGetSystemGraph:
+    @pytest.mark.asyncio
+    async def test_not_workspace_mode(self) -> None:
+        app = _make_workspace_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/system-graph")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_graph(self) -> None:
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=None)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/system-graph")
+        assert resp.status_code == 200
+        assert resp.json()["nodes"] == []
+
+    @pytest.mark.asyncio
+    async def test_returns_nodes_and_typed_edges(self, tmp_path: Path) -> None:
+        enricher = _make_system_graph_enricher(tmp_path)
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=enricher)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/system-graph")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert {n["id"] for n in data["nodes"]} == {"backend", "frontend"}
+        kinds = {(e["source"], e["target"], e["kind"]) for e in data["edges"]}
+        assert ("frontend", "backend", "http") in kinds  # consumer -> provider
+        assert ("frontend", "backend", "package") in kinds  # dependent -> dependency
+
+
+class TestGetBlastRadius:
+    @pytest.mark.asyncio
+    async def test_not_workspace_mode(self) -> None:
+        app = _make_workspace_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/blast-radius", params={"target": "backend"})
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_graph(self) -> None:
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=None)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/blast-radius", params={"target": "backend"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["impacted"] == []
+        assert data["unresolved_targets"] == ["backend"]
+
+    @pytest.mark.asyncio
+    async def test_changing_provider_impacts_consumer(self, tmp_path: Path) -> None:
+        enricher = _make_system_graph_enricher(tmp_path)
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=enricher)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/blast-radius", params={"target": "backend"})
+        assert resp.status_code == 200
+        data = resp.json()
+        # frontend consumes backend's http contract AND package-depends on it.
+        assert "frontend" in {n["id"] for n in data["impacted"]}
+        assert data["structural_count"] >= 1
+        assert "frontend" in data["impacted_repos"]
+
+    @pytest.mark.asyncio
+    async def test_unresolved_target_reported(self, tmp_path: Path) -> None:
+        enricher = _make_system_graph_enricher(tmp_path)
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=enricher)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/blast-radius", params={"target": "ghost"})
+        data = resp.json()
+        assert data["unresolved_targets"] == ["ghost"]
+        assert data["impacted"] == []
+
+    @pytest.mark.asyncio
+    async def test_target_is_required(self) -> None:
+        app = _make_workspace_app(ws_config=_make_ws_config())
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/blast-radius")
+        assert resp.status_code == 422  # missing required query param
+
+
+class TestGetDiagnostics:
+    @pytest.mark.asyncio
+    async def test_not_workspace_mode(self) -> None:
+        app = _make_workspace_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/diagnostics")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_reports_orphans_and_counts(self, tmp_path: Path) -> None:
+        enricher = _make_system_graph_enricher(tmp_path)
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=enricher)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/diagnostics")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_providers"] == 2
+        assert data["total_consumers"] == 1
+        assert data["total_links"] == 1
+        assert len(data["orphan_providers"]) == 1
+        assert data["orphan_providers"][0]["contract_id"] == "http::GET::/orphan"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/workspace/breaking-changes
+# ---------------------------------------------------------------------------
+
+
+def _make_breaking_enricher(tmp_path: Path) -> CrossRepoEnricher:
+    """Enricher backed by a real, core-built breaking-change report artifact."""
+    from repowise.core.workspace.breaking_change import detect_breaking_changes
+    from repowise.core.workspace.contracts import Contract, ContractLink, ContractStore
+
+    prev = ContractStore(
+        contracts=[
+            Contract(
+                repo="backend",
+                contract_id="http::GET::/api/users",
+                contract_type="http",
+                role="provider",
+                file_path="routes.py",
+                symbol_name="get_users",
+                confidence=0.85,
+            ),
+        ],
+        contract_links=[
+            ContractLink(
+                contract_id="http::GET::/api/users",
+                contract_type="http",
+                match_type="exact",
+                confidence=0.75,
+                provider_repo="backend",
+                provider_file="routes.py",
+                provider_symbol="get_users",
+                provider_service=None,
+                consumer_repo="frontend",
+                consumer_file="client.ts",
+                consumer_symbol="fetchUsers",
+                consumer_service=None,
+            ),
+        ],
+    )
+    report = detect_breaking_changes(prev, ContractStore(), generated_at="t")
+    _write_json(tmp_path / "breaking_changes.json", report.to_dict())
+    return CrossRepoEnricher(
+        tmp_path / "cross_repo_edges.json",
+        breaking_changes_path=tmp_path / "breaking_changes.json",
+    )
+
+
+class TestGetBreakingChanges:
+    @pytest.mark.asyncio
+    async def test_not_workspace_mode(self) -> None:
+        app = _make_workspace_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/breaking-changes")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_report(self) -> None:
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=None)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/breaking-changes")
+        assert resp.status_code == 200
+        assert resp.json()["changes"] == []
+
+    @pytest.mark.asyncio
+    async def test_reports_removed_endpoint_with_consumer(self, tmp_path: Path) -> None:
+        enricher = _make_breaking_enricher(tmp_path)
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=enricher)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/breaking-changes")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["breaking_count"] == 1
+        assert data["changes"][0]["kind"] == "removed_endpoint"
+        assert data["changes"][0]["impacted_consumers"][0]["repo"] == "frontend"
+        assert data["impacted_repos"] == ["frontend"]
+
+    @pytest.mark.asyncio
+    async def test_filter_by_repo_recomputes_rollups(self, tmp_path: Path) -> None:
+        enricher = _make_breaking_enricher(tmp_path)
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=enricher)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/breaking-changes", params={"repo": "nope"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["changes"] == []
+        assert data["total"] == 0
+        assert data["impacted_repos"] == []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/workspace/conformance
+# ---------------------------------------------------------------------------
+
+
+def _make_conformance_enricher(tmp_path: Path) -> CrossRepoEnricher:
+    """Enricher backed by a real, core-built conformance report artifact."""
+    from repowise.core.workspace.config import ConformanceRule
+    from repowise.core.workspace.conformance import build_conformance_report
+    from repowise.core.workspace.system_graph import SystemEdge, SystemGraph, SystemNode
+
+    graph = SystemGraph(
+        nodes=[
+            SystemNode(id="frontend", repo="frontend", service_path=None, name="frontend"),
+            SystemNode(id="db", repo="db", service_path=None, name="db"),
+        ],
+        edges=[
+            SystemEdge(
+                id="frontend->db:http",
+                source="frontend",
+                target="db",
+                kind="http",
+                match_type="exact",
+                confidence=1.0,
+                weight=1,
+                structural=True,
+            ),
+            SystemEdge(
+                id="db->frontend:http",
+                source="db",
+                target="frontend",
+                kind="http",
+                match_type="exact",
+                confidence=1.0,
+                weight=1,
+                structural=True,
+            ),
+        ],
+    )
+    report = build_conformance_report(
+        graph, [ConformanceRule(source="frontend", target="db")], generated_at="t"
+    )
+    _write_json(tmp_path / "conformance.json", report.to_dict())
+    return CrossRepoEnricher(
+        tmp_path / "cross_repo_edges.json",
+        conformance_path=tmp_path / "conformance.json",
+    )
+
+
+class TestGetConformance:
+    @pytest.mark.asyncio
+    async def test_not_workspace_mode(self) -> None:
+        app = _make_workspace_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/conformance")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_report(self) -> None:
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=None)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/conformance")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["violations"] == []
+        assert body["cycles"] == []
+
+    @pytest.mark.asyncio
+    async def test_reports_violation_and_cycle(self, tmp_path: Path) -> None:
+        enricher = _make_conformance_enricher(tmp_path)
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=enricher)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/conformance")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["violation_count"] == 1
+        assert data["cycle_count"] == 1
+        assert data["violations"][0]["source"] == "frontend"
+        assert data["violations"][0]["target"] == "db"
+        assert set(data["violating_repos"]) == {"frontend", "db"}
+
+    @pytest.mark.asyncio
+    async def test_filter_by_repo(self, tmp_path: Path) -> None:
+        enricher = _make_conformance_enricher(tmp_path)
+        app = _make_workspace_app(ws_config=_make_ws_config(), enricher=enricher)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/conformance", params={"repo": "frontend"})
+        assert resp.status_code == 200
+        data = resp.json()
+        # frontend participates in both the violation and the cycle
+        assert data["violation_count"] == 1
+        assert data["cycle_count"] == 1
+
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get("/api/workspace/conformance", params={"repo": "unrelated"})
+        data = resp.json()
+        assert data["violation_count"] == 0
+        assert data["cycle_count"] == 0

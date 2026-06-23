@@ -124,3 +124,63 @@ export interface WorkspaceGraphResponse {
   nodes: WorkspaceGraphNode[];
   edges: WorkspaceGraphEdge[];
 }
+
+// ---------------------------------------------------------------------------
+// System graph + extraction diagnostics — the canonical service-granular
+// shapes live in @repowise-dev/types; the wire responses match them 1:1, so we
+// re-export rather than re-derive (the repo-wide consolidation convention).
+// ---------------------------------------------------------------------------
+
+export type {
+  SystemNode,
+  SystemEdge,
+  SystemGraph,
+  SystemEdgeKind,
+  SystemEdgeMatchType,
+  ExtractionDiagnostics,
+  RepoDiagnostics,
+  UnmatchedConsumer,
+  UnmatchedReason,
+  OrphanProvider,
+  ImpactedNode,
+  CrossRepoBlastRadius,
+  ContractSchema,
+  SchemaField,
+  BreakingChange,
+  BreakingChangeConsumer,
+  BreakingChangeReport,
+  BreakingChangeSeverity,
+  ConformanceRule,
+  ConformanceViolation,
+  DependencyCycle,
+  ConformanceReport,
+  DsmCell,
+  DsmMatrix,
+  ArchitectureMetrics,
+  NodeArchitectureRole,
+  NodeRole,
+  ArchitectureType,
+} from "@repowise-dev/types";
+
+import type {
+  SystemGraph,
+  CrossRepoBlastRadius,
+  BreakingChangeReport,
+  ConformanceReport,
+  ArchitectureMetrics,
+} from "@repowise-dev/types";
+
+/** `GET /api/workspace/system-graph` — the full service-granular system graph. */
+export type WorkspaceSystemGraphResponse = SystemGraph;
+
+/** `GET /api/workspace/blast-radius` — cross-repo downstream impact set. */
+export type WorkspaceBlastRadiusResponse = CrossRepoBlastRadius;
+
+/** `GET /api/workspace/breaking-changes` — incompatible provider changes + impact. */
+export type WorkspaceBreakingChangesResponse = BreakingChangeReport;
+
+/** `GET /api/workspace/conformance` — architecture rule violations + cycles. */
+export type WorkspaceConformanceResponse = ConformanceReport;
+
+/** `GET /api/workspace/architecture` — architecture-complexity metrics + roles. */
+export type WorkspaceArchitectureResponse = ArchitectureMetrics;

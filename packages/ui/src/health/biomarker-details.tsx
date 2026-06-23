@@ -1,6 +1,8 @@
 "use client";
 
 import { ArrowLeftRight } from "lucide-react";
+import { PERF_BOUNDARY_LABEL } from "@repowise-dev/types/health";
+import type { C4IoKind } from "@repowise-dev/types/external-systems";
 
 export type BiomarkerDetailsRecord = Record<string, unknown>;
 
@@ -35,7 +37,7 @@ function joinStats(...parts: Array<string | null | undefined>): string | null {
 
 function StatLine({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[11px] text-[var(--color-text-tertiary)] tabular-nums">
+    <div className="text-xs text-[var(--color-text-tertiary)] tabular-nums">
       {children}
     </div>
   );
@@ -118,7 +120,7 @@ export function BiomarkerDetails({
     const corrPct = pct(num(details.correlation));
     const coChanges = num(details.co_change_count);
     return (
-      <div className="text-[11px] text-[var(--color-text-tertiary)]">
+      <div className="text-xs text-[var(--color-text-tertiary)]">
         <PartnerLink
           path={partner}
           onPartnerSelect={onPartnerSelect}
@@ -151,7 +153,7 @@ export function BiomarkerDetails({
     );
     if (!partner && !stats) return null;
     return (
-      <div className="text-[11px] text-[var(--color-text-tertiary)]">
+      <div className="text-xs text-[var(--color-text-tertiary)]">
         {stats ? <span className="tabular-nums">{stats}</span> : null}
         {partner ? (
           <div>
@@ -172,7 +174,7 @@ export function BiomarkerDetails({
       ? (details.assertion_lines as unknown[]).map(num).filter((v) => v != null)
       : [];
     return (
-      <div className="text-[11px] text-[var(--color-text-tertiary)]">
+      <div className="text-xs text-[var(--color-text-tertiary)]">
         {lines.length === 2 ? (
           <span className="tabular-nums">lines {lines[0]}–{lines[1]}</span>
         ) : null}
@@ -186,6 +188,45 @@ export function BiomarkerDetails({
           </div>
         ) : null}
       </div>
+    );
+  }
+
+  if (biomarkerType === "io_in_loop") {
+    const kind = str(details.boundary_kind);
+    const label = kind ? (PERF_BOUNDARY_LABEL[kind as C4IoKind] ?? kind) : null;
+    const crossFn = details.cross_function === true;
+    // The resolved caller -> ... -> sink chain (cross-function N+1 only). Each
+    // segment is "file.py::Name"; render the bare function names.
+    const path = Array.isArray(details.path)
+      ? (details.path as unknown[])
+          .map((seg) => (typeof seg === "string" ? seg.split("::").pop() ?? seg : null))
+          .filter((s): s is string => Boolean(s))
+      : [];
+    return (
+      <div className="text-xs text-[var(--color-text-tertiary)] space-y-0.5">
+        {label ? (
+          <div>
+            <span className="font-medium text-[var(--color-text-secondary)]">{label}</span>
+            {" boundary"}
+            {crossFn ? " · cross-function N+1" : " · in loop body"}
+          </div>
+        ) : null}
+        {path.length > 1 ? (
+          <div className="font-mono truncate" title={path.join(" → ")}>
+            {path.join(" → ")}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (biomarkerType === "blocking_sync_in_async") {
+    const api = str(details.api);
+    if (!api) return null;
+    return (
+      <StatLine>
+        <span className="font-mono">{api}</span> blocks the event loop
+      </StatLine>
     );
   }
 

@@ -15,13 +15,13 @@ export interface WorkspaceGraphNodeData {
   topLanguage: string;
 }
 
-function healthColor(score: number): string {
+export function healthColor(score: number): string {
   if (score >= 70) return "var(--color-risk-low)";
   if (score >= 40) return "var(--color-risk-medium)";
   return "var(--color-risk-high)";
 }
 
-function HealthRing({
+export function HealthRing({
   score,
   source,
   size = 36,
@@ -125,7 +125,7 @@ function WorkspaceGraphNodeInner({ data }: NodeProps) {
       </div>
 
       <div
-        className="mt-2 text-[9px] font-medium px-1.5 py-0.5 rounded-full text-center"
+        className="mt-2 text-[10px] font-medium px-1.5 py-0.5 rounded-full text-center"
         style={{
           background: `${langColor}30`,
           color: langColor,

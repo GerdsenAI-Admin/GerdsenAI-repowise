@@ -4,15 +4,28 @@ import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { AdaptivePanel } from "../shared/adaptive-panel";
 import { InfoTip } from "../shared/info-tip";
-import { biomarkerLabel, biomarkerInfo, CATEGORY_LABEL } from "./biomarker-glossary";
+import {
+  biomarkerLabel,
+  biomarkerInfo,
+  biomarkerDimension,
+  CATEGORY_LABEL,
+  DIMENSION_CHIP,
+  DIMENSION_LABEL,
+  type BiomarkerDimension,
+} from "./biomarker-glossary";
 import { BiomarkerDetails, type BiomarkerDetailsRecord } from "./biomarker-details";
 import { ScoreBreakdown, type ScoreBreakdownCategory } from "./score-breakdown";
+import { FileSignalsPanel } from "./file-signals-panel";
+import { Sparkline } from "./sparkline";
 import {
   SEVERITY_CHIP,
   SEVERITY_LABEL,
+  deltaColor,
+  formatDelta,
   scoreBadgeClass,
   type Severity,
 } from "./tokens";
+import type { FileHealthTrend, FileSignals } from "@repowise-dev/types/health";
 
 export interface HealthDrawerFinding {
   id: string;
@@ -25,6 +38,8 @@ export interface HealthDrawerFinding {
   reason: string;
   status?: string;
   details?: BiomarkerDetailsRecord | null;
+  /** Home pillar; falls back to the biomarker's glossary dimension. */
+  dimension?: BiomarkerDimension | string;
 }
 
 export interface HealthDrawerMetric {
@@ -37,6 +52,10 @@ export interface HealthDrawerMetric {
   duplication_pct?: number | null;
   line_coverage_pct?: number | null;
   has_test_file: boolean;
+  /** Per-dimension scores from the three-signal split (null until populated). */
+  defect_score?: number | null;
+  maintainability_score?: number | null;
+  performance_score?: number | null;
 }
 
 export interface HealthFileDrawerProps {
@@ -51,6 +70,10 @@ export interface HealthFileDrawerProps {
   } | null;
   findings?: HealthDrawerFinding[];
   suggestions?: Record<string, string>;
+  /** Per-file score trajectory; renders a compact sparkline when populated. */
+  trend?: FileHealthTrend | null;
+  /** Process / people / topology signals; the panel is silent when absent. */
+  signals?: FileSignals | null;
   fileViewHref?: string;
   /** Build a per-line deep-link from the drawer's function:line span. */
   fileViewHrefFor?: ((lineStart: number) => string) | undefined;
@@ -78,6 +101,8 @@ export function HealthFileDrawer({
   breakdown,
   findings = [],
   suggestions = {},
+  trend,
+  signals,
   fileViewHref,
   fileViewHrefFor,
   permalinkHref,
@@ -127,11 +152,31 @@ export function HealthFileDrawer({
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <Stat label="Score" value={
+                <Stat label="Defect risk" value={
                   <span className={`inline-flex items-baseline rounded px-2 py-0.5 font-bold tabular-nums ${scoreBadgeClass(metric.score)}`}>
                     {metric.score.toFixed(1)}
                     <span className="ml-0.5 text-[10px] font-normal opacity-70">/10</span>
                   </span>
+                } />
+                <Stat label="Maintainability" value={
+                  metric.maintainability_score == null ? (
+                    <span className="text-xs text-[var(--color-text-tertiary)]">—</span>
+                  ) : (
+                    <span className={`inline-flex items-baseline rounded px-2 py-0.5 font-bold tabular-nums ${scoreBadgeClass(metric.maintainability_score)}`}>
+                      {metric.maintainability_score.toFixed(1)}
+                      <span className="ml-0.5 text-[10px] font-normal opacity-70">/10</span>
+                    </span>
+                  )
+                } />
+                <Stat label="Performance" value={
+                  metric.performance_score == null ? (
+                    <span className="text-xs text-[var(--color-text-tertiary)]">—</span>
+                  ) : (
+                    <span className={`inline-flex items-baseline rounded px-2 py-0.5 font-bold tabular-nums ${scoreBadgeClass(metric.performance_score)}`}>
+                      {metric.performance_score.toFixed(1)}
+                      <span className="ml-0.5 text-[10px] font-normal opacity-70">/10</span>
+                    </span>
+                  )
                 } />
                 <Stat label="Max CCN" value={<span className="text-base font-semibold tabular-nums">{metric.max_ccn}</span>} />
                 <Stat label="Nest" value={<span className="text-base font-semibold tabular-nums">{metric.max_nesting}</span>} />
@@ -149,6 +194,33 @@ export function HealthFileDrawer({
                   </span>
                 } />
               </div>
+
+              {trend && trend.points.length >= 2 ? (
+                <div className="flex items-center gap-3 rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)] px-3 py-2">
+                  <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-tertiary)]">
+                    Trend
+                  </span>
+                  <Sparkline
+                    values={trend.points.map((p) => p.score)}
+                    domain={[0, 10]}
+                    width={120}
+                    height={28}
+                    stroke="var(--color-accent-primary)"
+                  />
+                  {trend.delta != null && trend.delta !== 0 ? (
+                    <span className={`text-xs font-semibold tabular-nums ${deltaColor(trend.delta)}`}>
+                      {formatDelta(trend.delta)}
+                    </span>
+                  ) : null}
+                  {trend.declining ? (
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-error)]">
+                      Declining
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <FileSignalsPanel signals={signals} />
 
               {fileViewHref ? (
                 <a
@@ -202,6 +274,22 @@ export function HealthFileDrawer({
                             <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-tertiary)]">
                               {CATEGORY_LABEL[info.category]}
                             </span>
+                            {(() => {
+                              const dim =
+                                f.dimension === "maintainability" ||
+                                f.dimension === "defect" ||
+                                f.dimension === "performance"
+                                  ? f.dimension
+                                  : biomarkerDimension(f.biomarker_type);
+                              return (
+                                <span
+                                  className={`inline-flex items-center rounded px-1.5 py-px text-[10px] font-medium ${DIMENSION_CHIP[dim]}`}
+                                  title={`${DIMENSION_LABEL[dim]} pillar`}
+                                >
+                                  {DIMENSION_LABEL[dim]}
+                                </span>
+                              );
+                            })()}
                             {f.function_name ? (() => {
                               const label = `${f.function_name}${f.line_start ? `:${f.line_start}` : ""}`;
                               const lineHref =

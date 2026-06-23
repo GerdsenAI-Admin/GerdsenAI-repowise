@@ -33,6 +33,8 @@
     "./dead-code/*": "./src/dead-code/*.tsx",
     "./health": "./src/health/index.ts",
     "./health/*": "./src/health/*.tsx",
+    "./coupling": "./src/coupling/index.ts",
+    "./coupling/*": "./src/coupling/*.tsx",
     "./decisions": "./src/decisions/index.ts",
     "./decisions/*": "./src/decisions/*.tsx",
     "./files": "./src/files/index.ts",
@@ -57,7 +59,11 @@
     "./chat/*": "./src/chat/*.tsx",
     "./dashboard": "./src/dashboard/index.ts",
     "./dashboard/*": "./src/dashboard/*.tsx",
+    "./stats": "./src/stats/index.ts",
+    "./stats/*": "./src/stats/*.tsx",
     "./workspace": "./src/workspace/index.ts",
+    "./workspace/system-map": "./src/workspace/system-map/index.ts",
+    "./workspace/dsm": "./src/workspace/dsm/index.ts",
     "./workspace/*": "./src/workspace/*.tsx",
     "./jobs": "./src/jobs/index.ts",
     "./jobs/*": "./src/jobs/*.tsx",
@@ -121,6 +127,7 @@
     "clsx": "^2.1.1",
     "d3-force": "^3.0.0",
     "d3-hierarchy": "^3.1.2",
+    "d3-shape": "^3.2.0",
     "elkjs": "^0.11.1",
     "framer-motion": "^11.11.0",
     "fuse.js": "^7.0.0",
@@ -142,11 +149,13 @@
   "peerDependencies": {
     "next-themes": "^0.4.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "swr": "^2.2.5"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.5.0",
     "@testing-library/react": "^16.0.0",
+    "@types/d3-shape": "^3.1.8",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",

@@ -37,6 +37,8 @@ export interface GraphFlowProps {
   repoName?: string;
   initialViewMode?: ViewMode;
   initialColorMode?: GraphFlowShellProps["initialColorMode"];
+  /** Controlled node color mode — the page URL-syncs it and passes it down. */
+  colorMode?: GraphFlowShellProps["colorMode"];
   initialSelectedNode?: string | null;
   onNodeClick?: GraphFlowShellProps["onNodeClick"];
   onNodeViewDocs?: GraphFlowShellProps["onNodeViewDocs"];
@@ -50,6 +52,8 @@ export interface GraphFlowProps {
   onViewModeChange?: (mode: ViewMode) => void;
   /** Fired when the node color mode changes so the page can sync the URL. */
   onColorModeChange?: GraphFlowShellProps["onColorModeChange"];
+  /** Restricts the in-canvas scope cluster (Explore omits the constellation). */
+  availableScopes?: GraphFlowShellProps["availableScopes"];
 }
 
 export function GraphFlow({
@@ -57,12 +61,14 @@ export function GraphFlow({
   repoName,
   initialViewMode,
   initialColorMode,
+  colorMode,
   initialSelectedNode,
   onNodeClick,
   onNodeViewDocs,
   onCommunityPanelOpen,
   onViewModeChange,
   onColorModeChange,
+  availableScopes,
 }: GraphFlowProps) {
   const router = useRouter();
   // Constellation (Knowledge Graph) is the default scope.
@@ -133,12 +139,14 @@ export function GraphFlow({
       executionFlows={executionFlowsData as ExecutionFlows | undefined}
       initialViewMode={initialViewMode}
       initialColorMode={initialColorMode}
+      colorMode={colorMode}
       initialSelectedNode={initialSelectedNode}
       onViewModeChange={(mode) => {
         setViewMode(mode);
         onViewModeChange?.(mode);
       }}
       onColorModeChange={onColorModeChange}
+      availableScopes={availableScopes}
       onModulePathChange={setModulePath}
       onExpandedModulesChange={(expanded) => setHasExpandedModules(expanded.size > 0)}
       onNodeClick={onNodeClick}

@@ -5,6 +5,7 @@
  */
 
 import type { CoChangePartner, FileAuthor, Hotspot, SignificantCommit } from "./git.js";
+import type { FileHealthTrend, FileSignals, HealthDimension } from "./health.js";
 
 export interface FileWikiPageRef {
   id: string;
@@ -29,6 +30,12 @@ export interface FileHealthFinding {
   reason: string;
   details: Record<string, unknown>;
   status: string;
+  /**
+   * The finding's "home" health dimension (`defect` / `maintainability` /
+   * `performance`), so the file page can tag findings by pillar. Optional /
+   * `defect` when an older payload omits it.
+   */
+  dimension?: HealthDimension;
 }
 
 export interface FileHealthMetric {
@@ -41,6 +48,15 @@ export interface FileHealthMetric {
   line_coverage_pct: number | null;
   module: string | null;
   duplication_pct: number | null;
+  /**
+   * Per-dimension scores from the three-signal split. `score` stays the overall
+   * surfaced number (== `defect_score`); `maintainability_score` and
+   * `performance_score` are the co-surfaced pillars. All optional/nullable so
+   * older payloads parse unchanged and unmeasured pillars read "—".
+   */
+  defect_score?: number | null;
+  maintainability_score?: number | null;
+  performance_score?: number | null;
 }
 
 export interface FileScoreBreakdownFinding {
@@ -73,6 +89,10 @@ export interface FileDetailHealth {
   metric: FileHealthMetric | null;
   breakdown: FileScoreBreakdown | null;
   findings: FileHealthFinding[];
+  /** Per-file score trajectory; `points` empty when history is thin. */
+  trend: FileHealthTrend | null;
+  /** Process / people / topology signals; null fields read "no signal". */
+  signals: FileSignals | null;
 }
 
 export interface FileAgentProvenance {

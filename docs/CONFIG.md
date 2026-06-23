@@ -96,6 +96,27 @@ distill:
   `commands.enabled: false`, so a rewrite hook installed globally from another
   repo stays inert in this one.
 
+### The `mcp:` block
+
+Controls which tools the MCP server advertises. The default surface is curated
+(10 tools in single-repo mode, plus 3 workspace-only tools in workspace mode);
+this block lets you opt extra tools in or trim the set down. The `repowise mcp
+--tools` / `--all` flags override it for a single launch.
+
+```yaml
+mcp:
+  tools: ["+get_execution_flows", "-get_dead_code"]   # adjust the default set
+  # tools: ["get_answer", "get_context"]              # or an explicit allowlist
+  # tools: all                                        # or everything available
+```
+
+- `+name` / `-name` entries add to or remove from the default set; an
+  unprefixed list is treated as an explicit allowlist.
+- Opt-in tools are `get_dependency_path` and `get_execution_flows`.
+- Workspace-only tools (`get_blast_radius`, `get_conformance`,
+  `get_architecture`) are added automatically in workspace mode and ignored if
+  named in single-repo mode. See [MCP_TOOLS.md](MCP_TOOLS.md#configuring-the-tool-surface).
+
 ---
 
 ## LLM providers
@@ -270,3 +291,49 @@ repowise init
 ```
 
 The schema is managed with Alembic migrations.
+
+---
+
+## Workspace config (`.repowise-workspace.yaml`)
+
+A multi-repo [workspace](WORKSPACES.md) is configured by a `.repowise-workspace.yaml` at the workspace root. Alongside the repo list it carries two optional blocks.
+
+### `repos[].tags`
+
+Each repo entry may declare free-form `tags` used to group services in conformance rules:
+
+```yaml
+repos:
+  - path: web
+    alias: frontend
+    tags: [ui, edge]
+  - path: services/db
+    alias: db
+    tags: [data]
+```
+
+### The `conformance:` block
+
+Declares architecture conformance rules (allow/deny dependency rules) checked by `repowise workspace check` and the workspace Conformance view. See [Architecture Conformance](WORKSPACES.md#architecture-conformance).
+
+```yaml
+conformance:
+  rules:
+    - source: frontend          # matcher: a glob over node id / repo / name
+      target: db                # matcher
+      allow: false              # optional, default false (deny). true = exception
+      description: "..."        # optional, shown in reports
+    - source: "tag:ui"          # matcher: tag:<name> — repos carrying that tag
+      target: "tag:data"
+    - source: "*"               # matcher: * — any service
+      target: legacy-payments
+```
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `source` | string (matcher) | required | The dependent side. `*`, `tag:<name>`, or a glob over node id / repo alias / display name |
+| `target` | string (matcher) | required | The depended-upon side (same matcher forms) |
+| `allow` | bool | `false` | `false` = deny (a matching dependency is a violation); `true` = whitelist an otherwise-denied edge |
+| `description` | string | `""` | Human-readable rationale, surfaced in reports |
+
+Rules are evaluated only against structural edges (HTTP, gRPC, event, package, db); behavioral co-change is never treated as a dependency.

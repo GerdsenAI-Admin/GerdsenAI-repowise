@@ -1,3 +1,4 @@
+export * from "./agent-tier-bar";
 export * from "./bus-factor-panel";
 export * from "./change-history-card";
 export * from "./churn-bar";
@@ -6,8 +7,10 @@ export * from "./co-change-list";
 export * from "./commit-category-donut";
 export * from "./commit-category-sparkline";
 export * from "./contributor-bar";
+export * from "./contributors-strip";
 export * from "./contributor-network";
 export * from "./hotspot-table";
+export * from "./ownership-donut";
 export * from "./ownership-table";
 export * from "./ownership-treemap";
 export * from "./risk-distribution-chart";

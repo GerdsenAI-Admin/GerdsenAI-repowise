@@ -1,13 +1,16 @@
 "use client";
 
 import useSWR from "swr";
-import { DependencyHeatmap } from "@repowise-dev/ui/dashboard/dependency-heatmap";
 import { ModuleOverviewGrid } from "@repowise-dev/ui/dashboard/module-overview-grid";
 import { OwnershipTreemap } from "@repowise-dev/ui/dashboard/ownership-treemap";
 import { ExecutionFlowsPanel } from "@repowise-dev/ui/dashboard/execution-flows-panel";
+import {
+  OverviewPanelPair,
+  TitledPanel,
+} from "@repowise-dev/ui/dashboard/overview-grid";
 import { BusFactorPanel } from "@repowise-dev/ui/git/bus-factor-panel";
 import { EmptyState } from "@repowise-dev/ui/shared";
-import { Card, CardContent, CardHeader, CardTitle } from "@repowise-dev/ui/ui/card";
+import { Card, CardContent } from "@repowise-dev/ui/ui/card";
 import { Skeleton } from "@repowise-dev/ui/ui/skeleton";
 import { CommunitySummaryGridWrapper } from "@/components/dashboard/community-summary-grid-wrapper";
 import { useCommunities, useExecutionFlows, useModuleGraph } from "@/lib/hooks/use-graph";
@@ -67,27 +70,13 @@ export function StructureTab({ repoId }: StructureTabProps) {
         />
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {modulesLoading ? (
-          <PanelSkeleton />
-        ) : hasModules ? (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Module Dependencies</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <DependencyHeatmap moduleGraph={moduleGraph} />
-            </CardContent>
-          </Card>
-        ) : null}
-        {communitiesLoading ? (
-          <PanelSkeleton />
-        ) : communities && communities.length > 0 ? (
-          <CommunitySummaryGridWrapper communities={communities} repoId={repoId} />
-        ) : null}
-      </div>
+      {communitiesLoading ? (
+        <PanelSkeleton />
+      ) : communities && communities.length > 0 ? (
+        <CommunitySummaryGridWrapper communities={communities} repoId={repoId} />
+      ) : null}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <OverviewPanelPair>
         {flowsLoading ? (
           <PanelSkeleton />
         ) : flows && flows.flows.length > 0 ? (
@@ -96,28 +85,18 @@ export function StructureTab({ repoId }: StructureTabProps) {
         {hotspotsLoading ? (
           <PanelSkeleton />
         ) : hotspotsPage && hotspotsPage.items.length > 0 ? (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Bus Factor</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <BusFactorPanel hotspots={hotspotsPage.items} />
-            </CardContent>
-          </Card>
+          <TitledPanel title="Bus Factor">
+            <BusFactorPanel hotspots={hotspotsPage.items} />
+          </TitledPanel>
         ) : null}
-      </div>
+      </OverviewPanelPair>
 
       {ownershipLoading ? (
         <PanelSkeleton rows={8} />
       ) : ownership && ownership.length > 0 ? (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Ownership Map</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <OwnershipTreemap entries={ownership} />
-          </CardContent>
-        </Card>
+        <TitledPanel title="Ownership Map">
+          <OwnershipTreemap entries={ownership} />
+        </TitledPanel>
       ) : null}
     </div>
   );

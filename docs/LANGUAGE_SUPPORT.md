@@ -429,6 +429,47 @@ without touching the shared pipeline files:
   class-level maps for all of those except Go (no class-grouping node).
   See `complexity/README.md` for the extension recipe and the LCOM4
   heuristic's limits.
+- `analysis/health/perf/dialects/` --- the **performance** health signal
+  (`io_in_loop` / `string_concat_in_loop` / language-specific markers) is
+  driven by a per-language `PerfDialect` plugin, registered in
+  `PERF_DIALECTS` exactly like `resolvers/` and the workspace `http/`
+  dialects. A dialect owns callee extraction (the per-grammar seam: Python
+  `attribute`, Go `selector_expression`, Java `method_invocation`'s
+  `object`/`name`, C# `member_access_expression`), the execution-sink
+  lexicon (`sink_kind`), the constant-loop / string-concat / async
+  predicates, and its own **marker list** --- so Go contributes
+  `defer_in_loop`, Java/Go contribute `regex_compile_in_loop`, C#
+  contributes sync-over-async `blocking_sync_in_async`, and the Phase-7a loop
+  markers (`resource_construction_in_loop`, `lock_in_loop`,
+  `serial_await_in_loop`, `membership_test_against_list_in_loop`) are each
+  opt-in per dialect via the `loop_call_marker` / `loop_stmt_marker` hooks,
+  none hardcoded in the walker. Every method has a safe "no signal" default, so a language
+  without a dialect (or one that overrides only some facets) produces no
+  false perf findings. Adding a language's perf support is one module plus a
+  `call_kinds` line on its `LanguageNodeMap` and its
+  `external_systems/io_kind.py` ecosystem rows --- no walker edits.
+
+#### Performance-signal coverage
+
+The performance signal needs the `PerfDialect` above (plus `call_kinds` on
+the language's `LanguageNodeMap`); it is independent of the control-flow /
+class / assertion tiers. A language without a dialect simply emits no perf
+findings.
+
+| Language | io_in_loop | string_concat | Phase-7a loop markers | Other language-specific markers | sync-over-async |
+|----------|:---:|:---:|---|---|:---:|
+| Python | Y | Y | resource_construction, lock, serial_await, membership | --- | `blocking_sync_in_async` |
+| TypeScript / JavaScript | Y | Y | resource_construction, serial_await, membership | --- | --- |
+| Java | Y | Y | resource_construction, lock | `regex_compile_in_loop` | --- (no async syntax) |
+| Go | Y | Y | resource_construction, lock | `defer_in_loop`, `regex_compile_in_loop` | --- (goroutines) |
+| C# | Y | Y | resource_construction, lock, serial_await | --- (.NET caches regexes) | `blocking_sync_in_async` (`.Result` / `.Wait()` / `.GetResult()`) |
+| Kotlin / Rust / C++ | --- | --- | --- | --- | --- |
+
+Kotlin will be nearly free once it rides the JVM lexicon; Rust (sqlx /
+reqwest) and C++ are later. What each dialect classifies as a db / network /
+filesystem / subprocess sink, and the per-language precision hazards, lives
+in `docs/CODE_HEALTH.md` and
+`local-stash/performance-pillar/PHASE6_PLAN.md`.
 
 ---
 
@@ -498,6 +539,51 @@ Adding a new language requires zero changes to `parser.py`, `graph.py`,
 `traverser.py`, or any analysis core file. New language work consists of
 adding one file to each per-language subpackage and registering it in the
 relevant `__init__.py` dispatcher / dict.
+
+---
+
+## Workspace contract extraction
+
+In **workspace mode** (multiple repos indexed together), repowise links
+service-to-service API contracts — HTTP routes and gRPC services — so a
+provider endpoint in one repo connects to its consumers in another. The
+extractors live in `core/workspace/extractors/` and follow the same
+dialect-plugin shape as the rest of the language pipeline: the orchestrator
+owns only the file walk, and each framework / client library is an
+independent module registered in a tuple.
+
+```
+workspace/extractors/
+  base.py            # iter_source_files walk + ScanContext (shared by all)
+  langs.py           # registry-derived extension sets (JS_TS, PYTHON, RUST, …)
+  http/
+    dialect.py       #   HttpDialect protocol + build_provider/consumer_contract
+    paths.py         #   normalize_http_path + URL helpers
+    express.py  fastapi.py  spring.py  laravel.py  go.py  aspnet.py   # providers
+    js_clients.py  python_clients.py  csharp_http.py                  # consumers
+    __init__.py      #   HttpExtractor + PROVIDER_DIALECTS / CONSUMER_DIALECTS
+  grpc/
+    dialect.py       #   GrpcDialect protocol + make_grpc_contract
+    proto.py  go.py  java.py  python.py  typescript.py  csharp.py
+    __init__.py      #   GrpcExtractor + DIALECTS
+```
+
+A dialect declares the file extensions it understands (via `langs.py`) and
+turns regex matches into `Contract`s through the shared builders, so every
+dialect emits identically-shaped providers/consumers and the path-normalization
+rules live in one place. Framework-specific quirks stay local to the dialect —
+Spring/ASP.NET class-prefix stitching, Go `HandleFunc` → `*` method, fetch
+GET/method de-duplication.
+
+**Adding a framework or client** means dropping one module into `http/` or
+`grpc/` and appending its dialect to the relevant registry tuple
+(`PROVIDER_DIALECTS`, `CONSUMER_DIALECTS`, or `DIALECTS`) — no orchestrator
+edits. The current coverage:
+
+| Contract | Providers | Consumers |
+|----------|-----------|-----------|
+| **HTTP** | Express, FastAPI, Spring, Laravel, Go (gin/echo/chi/net-http), ASP.NET (attribute + minimal), Rust (Axum routes, Actix/Rocket attribute macros) | `fetch` / `axios` / URL-literal wrapper calls (JS/TS), `requests` / `httpx` (Python), `HttpClient` / wrapper methods / `UnityWebRequest` / Best.HTTP (C#), `reqwest` (Rust) |
+| **gRPC** | `.proto` IDL, Go, Java, Python, NestJS (`@GrpcMethod`), C# (gRPC-dotnet) | Go, Java, Python, C# |
 
 ---
 

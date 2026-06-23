@@ -20,18 +20,24 @@ from repowise.server.deps import (
     verify_api_key,
 )
 from repowise.server.schemas import (
+    WorkspaceArchitectureResponse,
+    WorkspaceBlastRadiusResponse,
+    WorkspaceBreakingChangesResponse,
     WorkspaceCoChangeEntry,
     WorkspaceCoChangesResponse,
+    WorkspaceConformanceResponse,
     WorkspaceContractEntry,
     WorkspaceContractLinkEntry,
     WorkspaceContractsResponse,
     WorkspaceContractSummary,
     WorkspaceCrossRepoSummary,
+    WorkspaceExtractionDiagnostics,
     WorkspaceGraphEdge,
     WorkspaceGraphNode,
     WorkspaceGraphResponse,
     WorkspaceRepoEntry,
     WorkspaceResponse,
+    WorkspaceSystemGraphResponse,
 )
 from repowise.server.services.module_health import read_repo_health_score
 
@@ -158,9 +164,7 @@ def _query_repo_stats(db_path: Path) -> dict:
         # churn_percentile >= 90 predicate never matched: churn_percentile is
         # stored on a 0.0-1.0 scale and only scaled to 0-100 at the API layer.
         try:
-            row = c.execute(
-                "SELECT COUNT(*) FROM git_metadata WHERE is_hotspot = 1"
-            ).fetchone()
+            row = c.execute("SELECT COUNT(*) FROM git_metadata WHERE is_hotspot = 1").fetchone()
             result["hotspot_count"] = row[0] if row else 0
         except sqlite3.OperationalError:
             pass  # table or column may not exist
@@ -252,7 +256,10 @@ async def get_contracts(
 
     if enricher is None:
         return WorkspaceContractsResponse(
-            contracts=[], links=[], total_contracts=0, total_links=0,
+            contracts=[],
+            links=[],
+            total_contracts=0,
+            total_links=0,
         )
 
     contracts = list(getattr(enricher, "_contracts", []))
@@ -265,8 +272,7 @@ async def get_contracts(
     if repo:
         contracts = [c for c in contracts if c.get("repo") == repo]
         links = [
-            lk for lk in links
-            if lk.get("provider_repo") == repo or lk.get("consumer_repo") == repo
+            lk for lk in links if lk.get("provider_repo") == repo or lk.get("consumer_repo") == repo
         ]
     if role:
         contracts = [c for c in contracts if c.get("role") == role]
@@ -341,7 +347,8 @@ async def get_co_changes(
 
     if repo:
         co_changes = [
-            cc for cc in co_changes
+            cc
+            for cc in co_changes
             if cc.get("source_repo") == repo or cc.get("target_repo") == repo
         ]
     if min_strength > 0:
@@ -477,6 +484,243 @@ async def get_workspace_graph(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/workspace/system-graph
+# ---------------------------------------------------------------------------
+
+
+@router.get("/system-graph", response_model=WorkspaceSystemGraphResponse)
+async def get_system_graph(
+    ws_config=Depends(get_workspace_config),
+    enricher=Depends(get_cross_repo_enricher),
+):
+    """Service-granular system graph: typed service nodes + directed edges.
+
+    Read straight from the ``system_graph.json`` artifact built during workspace
+    update. Edge direction is uniform — ``source`` depends on / calls ``target``.
+    Returns an empty graph (not 404) when no graph has been built yet.
+    """
+    _require_workspace(ws_config)
+
+    graph = enricher.get_system_graph() if enricher is not None else None
+    if not graph:
+        return WorkspaceSystemGraphResponse()
+    return WorkspaceSystemGraphResponse(**graph)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/workspace/diagnostics
+# ---------------------------------------------------------------------------
+
+
+@router.get("/diagnostics", response_model=WorkspaceExtractionDiagnostics)
+async def get_diagnostics(
+    ws_config=Depends(get_workspace_config),
+    enricher=Depends(get_cross_repo_enricher),
+):
+    """Extraction diagnostics — why the cross-repo link count is what it is.
+
+    Reports per-repo provider/consumer counts, unmatched consumers grouped by
+    reason, orphan providers, and weak links. Sourced from the system graph
+    artifact's ``diagnostics`` block.
+    """
+    _require_workspace(ws_config)
+
+    diagnostics = enricher.get_diagnostics() if enricher is not None else None
+    if not diagnostics:
+        return WorkspaceExtractionDiagnostics()
+    return WorkspaceExtractionDiagnostics(**diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/workspace/blast-radius
+# ---------------------------------------------------------------------------
+
+
+@router.get("/blast-radius", response_model=WorkspaceBlastRadiusResponse)
+async def get_blast_radius(
+    ws_config=Depends(get_workspace_config),
+    enricher=Depends(get_cross_repo_enricher),
+    target: list[str] = Query(
+        ...,
+        description="One or more node ids ('repo' or 'repo::service/path') or repo aliases.",
+    ),
+    max_depth: int = Query(3, ge=1, le=8, description="Reachability depth."),
+    include_behavioral: bool = Query(
+        True, description="Include co-change (behavioral) edges in reachability."
+    ),
+):
+    """Cross-repo blast radius — downstream services impacted by a change.
+
+    Traverses the system graph against its edge direction (a consumer→provider
+    edge means changing the provider impacts the consumer), ranking impacted
+    services by an impact score that weights structural dependencies above
+    behavioral co-change. Reads the same ``system_graph.json`` artifact the map
+    renders. Returns an empty result (not 404) when no graph is built yet.
+    """
+    _require_workspace(ws_config)
+
+    from repowise.core.workspace.blast_radius import cross_repo_blast_radius
+    from repowise.core.workspace.system_graph import SystemGraph
+
+    raw = enricher.get_system_graph() if enricher is not None else None
+    if not raw:
+        return WorkspaceBlastRadiusResponse(targets=[], unresolved_targets=list(target))
+
+    graph = SystemGraph.from_dict(raw)
+    result = cross_repo_blast_radius(
+        graph, target, max_depth=max_depth, include_behavioral=include_behavioral
+    )
+    return WorkspaceBlastRadiusResponse(**result.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# GET /api/workspace/breaking-changes
+# ---------------------------------------------------------------------------
+
+
+@router.get("/breaking-changes", response_model=WorkspaceBreakingChangesResponse)
+async def get_breaking_changes(
+    ws_config=Depends(get_workspace_config),
+    enricher=Depends(get_cross_repo_enricher),
+    repo: str | None = Query(None, description="Filter to changes whose provider is in this repo."),
+    severity: str | None = Query(None, description="Filter: breaking or warning."),
+):
+    """Provider contract changes that break consumers across repos.
+
+    Computed during the most recent ``repowise update --workspace`` by diffing the
+    freshly-extracted contracts against the previously-indexed set, then resolving
+    each change's direct consumers from the matched links. Returns an empty report
+    (not 404) when no breaking changes were detected or no report exists yet.
+    """
+    _require_workspace(ws_config)
+
+    report = enricher.get_breaking_changes() if enricher is not None else None
+    if not report:
+        return WorkspaceBreakingChangesResponse()
+
+    changes = list(report.get("changes", []))
+    if repo:
+        changes = [c for c in changes if c.get("provider_repo") == repo]
+    if severity:
+        changes = [c for c in changes if c.get("severity") == severity]
+
+    # Recompute rollups when a filter narrowed the set so the response stays
+    # self-consistent; otherwise pass the persisted rollups straight through.
+    if repo or severity:
+        impacted_repos = sorted(
+            {ic.get("repo", "") for c in changes for ic in c.get("impacted_consumers", [])}
+        )
+        impacted_services = sorted(
+            {ic.get("node_id", "") for c in changes for ic in c.get("impacted_consumers", [])}
+        )
+        return WorkspaceBreakingChangesResponse(
+            version=report.get("version", 1),
+            generated_at=report.get("generated_at", ""),
+            changes=changes,
+            total=len(changes),
+            breaking_count=sum(1 for c in changes if c.get("severity") == "breaking"),
+            warning_count=sum(1 for c in changes if c.get("severity") == "warning"),
+            impacted_repos=impacted_repos,
+            impacted_services=impacted_services,
+            total_impacted_consumers=sum(len(c.get("impacted_consumers", [])) for c in changes),
+        )
+
+    return WorkspaceBreakingChangesResponse(**report)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/workspace/conformance
+# ---------------------------------------------------------------------------
+
+
+@router.get("/conformance", response_model=WorkspaceConformanceResponse)
+async def get_conformance(
+    ws_config=Depends(get_workspace_config),
+    enricher=Depends(get_cross_repo_enricher),
+    repo: str | None = Query(
+        None, description="Filter to violations/cycles that involve this repo alias."
+    ),
+):
+    """Architecture conformance — declared dependency-rule violations + cycles.
+
+    Computed during the most recent ``repowise update --workspace`` by checking
+    the workspace's declared allow/deny rules against the system graph and
+    detecting circular service dependencies. Returns an empty report (not 404)
+    when no rules are declared, no findings exist, or no report has been built.
+    """
+    _require_workspace(ws_config)
+
+    report = enricher.get_conformance() if enricher is not None else None
+    if not report:
+        return WorkspaceConformanceResponse()
+
+    if not repo:
+        return WorkspaceConformanceResponse(**report)
+
+    # Narrow to findings that involve the repo, recomputing rollups so the
+    # response stays self-consistent.
+    scoped = enricher.get_conformance_for_repo(repo)
+    violations = scoped["violations"]
+    cycles = scoped["cycles"]
+    violating_repos = sorted(
+        {v.get("source", "").split("::", 1)[0] for v in violations}
+        | {v.get("target", "").split("::", 1)[0] for v in violations}
+    )
+    return WorkspaceConformanceResponse(
+        version=report.get("version", 1),
+        generated_at=report.get("generated_at", ""),
+        rules_evaluated=report.get("rules_evaluated", 0),
+        violations=violations,
+        cycles=cycles,
+        violation_count=len(violations),
+        cycle_count=len(cycles),
+        violating_repos=violating_repos,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/workspace/architecture
+# ---------------------------------------------------------------------------
+
+
+@router.get("/architecture", response_model=WorkspaceArchitectureResponse)
+async def get_architecture(
+    ws_config=Depends(get_workspace_config),
+    enricher=Depends(get_cross_repo_enricher),
+):
+    """Architecture-complexity metrics — propagation cost, core, and a 1-10 score.
+
+    Computed at request time from the same ``system_graph.json`` artifact the map
+    renders, using structural edges only (co-change is excluded). The declared-rule
+    violation count, if a conformance report exists, is folded into the score.
+    Deterministic and LLM-free. Returns empty metrics (not 404) when no graph is
+    built yet.
+    """
+    _require_workspace(ws_config)
+
+    from repowise.core.workspace.architecture_metrics import compute_architecture_metrics
+    from repowise.core.workspace.system_graph import SystemGraph
+
+    raw = enricher.get_system_graph() if enricher is not None else None
+    if not raw:
+        return WorkspaceArchitectureResponse()
+
+    graph = SystemGraph.from_dict(raw)
+
+    # Fold in the conformance violation count when a report exists — the metric is
+    # otherwise independent of rule evaluation.
+    conformance = enricher.get_conformance() if enricher is not None else None
+    violations = int(conformance.get("violation_count", 0)) if conformance else 0
+
+    metrics = compute_architecture_metrics(
+        graph,
+        conformance_violations=violations,
+        generated_at=raw.get("generated_at", ""),
+    )
+    return WorkspaceArchitectureResponse(**metrics.to_dict())
+
+
+# ---------------------------------------------------------------------------
 # POST /api/workspace/sync
 # ---------------------------------------------------------------------------
 
@@ -547,7 +791,9 @@ async def sync_workspace(
                 WorkspaceSyncResult(
                     alias=entry.alias,
                     status="skipped",
-                    reason="not indexed yet (run `repowise update --repo " + entry.alias + "` from the CLI)",
+                    reason="not indexed yet (run `repowise update --repo "
+                    + entry.alias
+                    + "` from the CLI)",
                 )
             )
             continue
@@ -555,9 +801,7 @@ async def sync_workspace(
         # Discover repo_id from the per-repo DB.
         try:
             with sqlite3.connect(str(db_path)) as conn:
-                row = conn.execute(
-                    "SELECT id FROM repositories LIMIT 1"
-                ).fetchone()
+                row = conn.execute("SELECT id FROM repositories LIMIT 1").fetchone()
         except Exception as exc:
             results.append(
                 WorkspaceSyncResult(

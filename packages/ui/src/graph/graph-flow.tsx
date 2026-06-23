@@ -40,7 +40,7 @@ import { useGraphContextMenu } from "./use-graph-context-menu";
 import { useGraphSearch } from "./use-graph-search";
 import { useCommunityFilter } from "./use-community-filter";
 import { useGraphKeyboardShortcuts } from "./use-graph-keyboard-shortcuts";
-import { GraphToolbar, type ColorMode, type ViewMode, type LayoutMode, type GraphTheme } from "./graph-toolbar";
+import { GraphToolbar, type ColorMode, type ViewMode, type LayoutMode, type GraphTheme, type Scope } from "./graph-toolbar";
 import { GraphLegend } from "./graph-legend";
 import { GraphContextMenu } from "./graph-context-menu";
 import { GraphInspectionPanel } from "./graph-inspection-panel";
@@ -102,9 +102,15 @@ export interface GraphFlowProps {
   communities?: CommunitySummaryItem[];
   executionFlows?: ExecutionFlows;
   initialViewMode?: ViewMode;
-  /** Initial node color mode. Hosts derive this from their URL state instead
-   *  of the component reading window.location. */
+  /** Initial node color mode (uncontrolled seed). Hosts derive this from their
+   *  URL state instead of the component reading window.location. Ignored when
+   *  {@link colorMode} is supplied. */
   initialColorMode?: ColorMode;
+  /** Controlled node color mode. When supplied, the host owns the value (and
+   *  typically URL-syncs it); the component reflects it directly and reports
+   *  user changes via {@link onColorModeChange}. Omit to let the component
+   *  track its own color mode seeded by {@link initialColorMode}. */
+  colorMode?: ColorMode;
   initialSelectedNode?: string | null;
   onViewModeChange?: (mode: ViewMode) => void;
   /** Fired when the node color mode changes (toolbar or 1/2/3 shortcut) so
@@ -137,6 +143,10 @@ export interface GraphFlowProps {
    *  hosting page dismiss any competing right-rail panel (doc panel etc.)
    *  so the right side is a single sidebar. */
   onCommunityPanelOpen?: (communityId: number) => void;
+  /** Restricts the toolbar's scope cluster. Explore passes `["modules","full"]`
+   *  so the constellation scope (now the Knowledge Graph view's Communities
+   *  lens) is not reachable from here. Defaults to all scopes. */
+  availableScopes?: Scope[];
 }
 
 export function GraphFlow(props: GraphFlowProps) {
@@ -158,6 +168,7 @@ export function GraphFlow(props: GraphFlowProps) {
     executionFlows,
     initialViewMode,
     initialColorMode,
+    colorMode: controlledColorMode,
     initialSelectedNode,
     onViewModeChange,
     onColorModeChange,
@@ -170,6 +181,7 @@ export function GraphFlow(props: GraphFlowProps) {
     renderPathFinder,
     renderCommunityPanel,
     onCommunityPanelOpen,
+    availableScopes,
   } = props;
 
   const sigmaRef = useRef<SigmaCanvasHandle>(null);
@@ -178,7 +190,21 @@ export function GraphFlow(props: GraphFlowProps) {
   // ---- Core state ----
   // Default scope is the constellation (radial Knowledge Graph).
   const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode ?? "architecture");
-  const [colorMode, setColorMode] = useState<ColorMode>(initialColorMode ?? "community");
+  // Color mode is controlled by the host when `colorMode` is supplied
+  // (URL-synced); otherwise the component tracks it locally, seeded by
+  // `initialColorMode`. The wrapped setter routes through the host callback in
+  // controlled mode and falls back to local state in uncontrolled mode.
+  const [colorModeState, setColorModeState] = useState<ColorMode>(
+    initialColorMode ?? "community",
+  );
+  const colorMode = controlledColorMode ?? colorModeState;
+  const setColorMode = useCallback(
+    (next: ColorMode) => {
+      if (onColorModeChange) onColorModeChange(next);
+      else setColorModeState(next);
+    },
+    [onColorModeChange],
+  );
   const [highlightedPath, setHighlightedPath] = useState<Set<string>>(new Set());
   const [highlightedEdges, setHighlightedEdges] = useState<Set<string>>(new Set());
   const [showPathFinder, setShowPathFinder] = useState(false);
@@ -856,18 +882,6 @@ export function GraphFlow(props: GraphFlowProps) {
     onToggleHelp: handleToggleShortcutHelp,
   });
 
-  // Surface color-mode changes (toolbar or 1/2/3 shortcut) to the host so it
-  // can sync the URL. Skip the mount-time report — only real changes count.
-  const colorModeReported = useRef(false);
-  useEffect(() => {
-    if (!colorModeReported.current) {
-      colorModeReported.current = true;
-      return;
-    }
-    onColorModeChange?.(colorMode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colorMode]);
-
   const handlePathFound = useCallback(
     (pathNodes: string[]) => {
       setHighlightedPath(new Set(pathNodes));
@@ -1079,7 +1093,7 @@ export function GraphFlow(props: GraphFlowProps) {
             <div className="flex items-center gap-1 rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)]/90 backdrop-blur-sm px-2.5 py-1.5 shadow-lg shadow-black/20">
               <button
                 onClick={() => handleBreadcrumbClick(-1)}
-                className="flex items-center gap-1 text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-accent-graph)] transition-colors"
+                className="flex items-center gap-1 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-accent-graph)] transition-colors"
               >
                 <Home className="w-3 h-3" />
                 <span>Root</span>
@@ -1093,7 +1107,7 @@ export function GraphFlow(props: GraphFlowProps) {
                     <ChevronRight className="w-3 h-3 text-[var(--color-text-tertiary)]" />
                     <button
                       onClick={() => !isLast && handleBreadcrumbClick(i)}
-                      className={`text-[11px] font-mono transition-colors ${
+                      className={`text-xs font-mono transition-colors ${
                         isLast
                           ? "text-[var(--color-text-primary)] font-medium cursor-default"
                           : "text-[var(--color-text-tertiary)] hover:text-[var(--color-accent-graph)]"
@@ -1148,6 +1162,7 @@ export function GraphFlow(props: GraphFlowProps) {
             graphTheme={graphTheme}
             onGraphThemeChange={handleGraphThemeChange}
             onToggleHelp={handleToggleShortcutHelp}
+            availableScopes={availableScopes}
           />
         </div>
 
@@ -1169,7 +1184,7 @@ export function GraphFlow(props: GraphFlowProps) {
           <div className="absolute top-14 right-3 z-10 w-[min(16rem,calc(100vw-1.5rem))]">
             <div className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)]/95 backdrop-blur-sm shadow-lg shadow-black/20 p-3">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-medium text-[var(--color-text-primary)]">
+                <span className="text-xs font-medium text-[var(--color-text-primary)]">
                   Execution Flows
                 </span>
                 <span className="text-[10px] text-[var(--color-text-tertiary)]">
@@ -1181,7 +1196,7 @@ export function GraphFlow(props: GraphFlowProps) {
                   <button
                     key={flow.entry_point}
                     onClick={() => setActiveFlowIdx(activeFlowIdx === idx ? null : idx)}
-                    className={`w-full text-left px-2 py-1.5 rounded-md text-[11px] transition-colors ${
+                    className={`w-full text-left px-2 py-1.5 rounded-md text-xs transition-colors ${
                       activeFlowIdx === idx
                         ? "bg-[var(--color-accent-primary)]/15 text-[var(--color-accent-primary)]"
                         : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-overlay)] hover:text-[var(--color-text-primary)]"

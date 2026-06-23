@@ -24,6 +24,7 @@ import { Separator } from "@repowise-dev/ui/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@repowise-dev/ui/ui/tooltip";
 import { ThemeToggle } from "@repowise-dev/ui/shared/theme-toggle";
 import { AddRepoDialog } from "@/components/repos/add-repo-dialog";
+import { VersionFooter } from "./version-footer";
 import type { RepoResponse, WorkspaceResponse } from "@/lib/api/types";
 
 interface SidebarProps {
@@ -226,19 +227,50 @@ export function Sidebar({ repos = [], activeRepoId, workspace }: SidebarProps) {
                   }
 
                   if (isIconOnly) {
+                    // Collapsed: the active repo still exposes its full nav as
+                    // icons (so the repository-view options stay reachable, e.g.
+                    // on Docs where the sidebar auto-collapses); inactive repos
+                    // stay a single dot that jumps to their overview.
+                    if (isActive) {
+                      return (
+                        <div key={repo.id} className="space-y-0.5">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div
+                                className="flex w-full items-center justify-center rounded-md p-2 text-[var(--color-accent-primary)]"
+                                aria-label={repo.name}
+                              >
+                                <Circle className="h-2.5 w-2.5 fill-[var(--color-accent-primary)]" />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">{repo.name}</TooltipContent>
+                          </Tooltip>
+                          {navGroups.map((group, gi) => (
+                            <React.Fragment key={group.label ?? gi}>
+                              {gi > 0 && <Separator className="my-1.5" />}
+                              {group.items.map((item) => (
+                                <SidebarNavItem
+                                  key={item.href}
+                                  item={item}
+                                  isActive={isNavItemActive(item, pathname)}
+                                  iconOnly
+                                />
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      );
+                    }
                     return (
                       <Tooltip key={repo.id}>
                         <TooltipTrigger asChild>
-                          <button
-                            onClick={() => toggleRepo(repo.id)}
-                            className={cn(
-                              "flex w-full items-center justify-center rounded-md p-2 transition-colors hover:bg-[var(--color-bg-elevated)]",
-                              isActive ? "text-[var(--color-accent-primary)]" : "text-[var(--color-text-tertiary)]",
-                            )}
+                          <Link
+                            href={`/repos/${repo.id}/overview`}
+                            className="flex w-full items-center justify-center rounded-md p-2 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)]"
                             aria-label={repo.name}
                           >
-                            <Circle className={cn("h-2.5 w-2.5", isActive ? "fill-[var(--color-accent-primary)]" : "fill-current")} />
-                          </button>
+                            <Circle className="h-2.5 w-2.5 fill-current" />
+                          </Link>
                         </TooltipTrigger>
                         <TooltipContent side="right">{repo.name}</TooltipContent>
                       </Tooltip>
@@ -322,9 +354,7 @@ export function Sidebar({ repos = [], activeRepoId, workspace }: SidebarProps) {
       {!isIconOnly && (
         <div className="flex flex-col gap-3 border-t border-[var(--color-border-default)] px-4 py-3">
           <ThemeToggle className="w-full justify-between" />
-          <p className="text-xs text-[var(--color-text-tertiary)]">
-            repowise v0.19.1
-          </p>
+          <VersionFooter />
         </div>
       )}
     </aside>

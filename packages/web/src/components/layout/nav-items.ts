@@ -3,11 +3,13 @@
  * the mobile nav consume these — the two surfaces must never diverge again.
  *
  * Repo IA (6 groups + Settings pinned last):
- *   Overview · Docs · Architecture · Code Health · People & History · Chat
+ *   Overview · Docs · Architecture · Knowledge Graph · Code Health ·
+ *   People & History · Chat
  */
 
 import {
   Activity,
+  BarChart3,
   BookOpen,
   Boxes,
   DollarSign,
@@ -20,7 +22,9 @@ import {
   Link2,
   MessageSquare,
   Settings,
+  ShieldCheck,
   Users,
+  Waypoints,
 } from "lucide-react";
 
 export interface NavItem {
@@ -43,6 +47,8 @@ export const GLOBAL_NAV: NavItem[] = [
 
 export const WORKSPACE_NAV: NavItem[] = [
   { label: "Overview", href: "/workspace", icon: Layers, exact: true },
+  { label: "System Map", href: "/workspace/system-map", icon: Waypoints },
+  { label: "Conformance", href: "/workspace/conformance", icon: ShieldCheck },
   { label: "Contracts", href: "/workspace/contracts", icon: Link2 },
   { label: "Co-Changes", href: "/workspace/co-changes", icon: GitMerge },
 ];
@@ -55,6 +61,7 @@ export function repoNavGroups(repoId: string): NavGroup[] {
         { label: "Overview", href: `${base}/overview`, icon: Activity },
         { label: "Docs", href: `${base}/docs`, icon: BookOpen },
         { label: "Architecture", href: `${base}/architecture`, icon: Boxes },
+        { label: "Knowledge Graph", href: `${base}/knowledge-graph`, icon: Waypoints },
         { label: "Code Health", href: `${base}/code-health`, icon: HeartPulse },
       ],
     },
@@ -72,6 +79,7 @@ export function repoNavGroups(repoId: string): NavGroup[] {
     {
       label: "Settings",
       items: [
+        { label: "Stats", href: `${base}/stats`, icon: BarChart3 },
         { label: "Usage & savings", href: `${base}/costs`, icon: DollarSign },
         { label: "Settings", href: `${base}/settings`, icon: Settings },
       ],

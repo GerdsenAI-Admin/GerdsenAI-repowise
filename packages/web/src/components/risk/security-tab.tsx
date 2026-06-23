@@ -1,14 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import useSWR from "swr";
 import { RotateCw } from "lucide-react";
 import { toast } from "sonner";
-import { SeverityDistribution } from "@repowise-dev/ui/security/severity-distribution";
 import { SecurityFindingsTable } from "@repowise-dev/ui/security/findings-table";
-import { FindingsByDirectory } from "@repowise-dev/ui/security/findings-by-directory";
+import { SeverityDirectoryMatrix } from "@repowise-dev/ui/security/severity-directory-matrix";
+import { AiPromptModal, buildSecurityAiPrompt } from "@repowise-dev/ui/health";
 import { Button } from "@repowise-dev/ui/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@repowise-dev/ui/ui/card";
+import { CollapsibleSection } from "@repowise-dev/ui/shared/collapsible-section";
 import { Skeleton } from "@repowise-dev/ui/ui/skeleton";
 import { listSecurityFindings, type SecurityFinding } from "@/lib/api/security";
 import { syncRepo } from "@/lib/api/repos";
@@ -22,6 +23,7 @@ export function SecurityTab({ repoId }: { repoId: string }) {
     { revalidateOnFocus: false },
   );
   const [rescanning, setRescanning] = useState(false);
+  const [promptFinding, setPromptFinding] = useState<SecurityFinding | null>(null);
 
   const handleRescan = async () => {
     setRescanning(true);
@@ -36,14 +38,6 @@ export function SecurityTab({ repoId }: { repoId: string }) {
   };
 
   const { showFile, dialog } = useFileCardHost(repoId);
-
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { high: 0, med: 0, low: 0 };
-    for (const f of findings ?? []) {
-      c[f.severity] = (c[f.severity] ?? 0) + 1;
-    }
-    return c;
-  }, [findings]);
 
   const handleSelect = (f: SecurityFinding) => {
     const data: FileCardData = {
@@ -73,10 +67,7 @@ export function SecurityTab({ repoId }: { repoId: string }) {
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Skeleton className="h-40 w-full rounded-lg" />
-          <Skeleton className="h-40 w-full rounded-lg" />
-        </div>
+        <Skeleton className="h-40 w-full rounded-lg" />
       ) : error ? (
         <Card>
           <CardHeader className="pb-2">
@@ -88,13 +79,35 @@ export function SecurityTab({ repoId }: { repoId: string }) {
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <SeverityDistribution counts={counts} />
-            <FindingsByDirectory findings={findings ?? []} />
-          </div>
-          <SecurityFindingsTable findings={findings ?? []} onSelect={handleSelect} />
+          {/* Single visual rollup — per-severity counts live in the table's
+              filter pills below, not in a separate distribution card. */}
+          <SeverityDirectoryMatrix findings={findings ?? []} />
+          <CollapsibleSection
+            title="All findings"
+            hint={`${(findings ?? []).length} findings`}
+            defaultOpen={false}
+          >
+            <SecurityFindingsTable
+              findings={findings ?? []}
+              onSelect={handleSelect}
+              onGeneratePrompt={setPromptFinding}
+            />
+          </CollapsibleSection>
         </>
       )}
+
+      <AiPromptModal
+        open={promptFinding !== null}
+        onOpenChange={(o) => !o && setPromptFinding(null)}
+        getPrompt={
+          promptFinding
+            ? (flavor) => buildSecurityAiPrompt({ finding: promptFinding, flavor })
+            : null
+        }
+        filePath={promptFinding?.file_path}
+        title="AI fix prompt"
+        description="A ready-to-paste prompt that walks your AI agent through confirming and remediating this security finding."
+      />
 
       {dialog}
     </div>

@@ -39,6 +39,7 @@ const FLAVORS: {
 }[] = [
   { value: "generic", label: "Generic", Icon: Wand2, hint: "Any agent — Copilot, Codex, ChatGPT, custom." },
   { value: "claude-code", label: "Claude Code", Icon: Bot, hint: "Tuned for Claude Code's tools (Read / Edit / TodoWrite)." },
+  { value: "claude-code-mcp", label: "Claude + repowise MCP", Icon: Sparkles, hint: "Steers the agent to repowise's MCP tools (get_context / get_risk / get_why) instead of re-grepping." },
   { value: "cursor", label: "Cursor", Icon: Code2, hint: "Uses @file context, Cursor editing conventions." },
 ];
 
@@ -114,10 +115,10 @@ export function AiPromptModal({
 
         <div className="space-y-3">
           <div>
-            <p className="text-[11px] uppercase tracking-wider text-[var(--color-text-tertiary)] mb-1.5">
+            <p className="text-xs uppercase tracking-wider text-[var(--color-text-tertiary)] mb-1.5">
               Target agent
             </p>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {FLAVORS.map((f) => {
                 const active = flavor === f.value;
                 return (
@@ -139,7 +140,7 @@ export function AiPromptModal({
                         {f.label}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)] leading-snug">
+                    <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)] leading-snug">
                       {f.hint}
                     </p>
                   </button>
@@ -154,7 +155,7 @@ export function AiPromptModal({
             </pre>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--color-text-tertiary)]">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--color-text-tertiary)]">
             <span>
               {prompt.length.toLocaleString()} chars · approx{" "}
               {Math.round(prompt.length / 4).toLocaleString()} tokens

@@ -5,6 +5,11 @@ import type {
   WorkspaceCoChangesResponse,
   WorkspaceGraphResponse,
   WorkspaceSyncResponse,
+  WorkspaceSystemGraphResponse,
+  WorkspaceBlastRadiusResponse,
+  WorkspaceBreakingChangesResponse,
+  WorkspaceConformanceResponse,
+  WorkspaceArchitectureResponse,
 } from "./types";
 
 export async function getWorkspace(
@@ -43,6 +48,69 @@ export async function getWorkspaceCoChanges(opts?: {
 
 export async function getWorkspaceGraph(): Promise<WorkspaceGraphResponse> {
   return apiGet<WorkspaceGraphResponse>("/api/workspace/graph");
+}
+
+/**
+ * The service-granular system graph (nodes = services, typed directed edges)
+ * that the Live System Map renders. Thin pass-through over the persisted
+ * `system_graph.json` artifact.
+ */
+export async function getWorkspaceSystemGraph(
+  fetchOptions?: RequestInit,
+): Promise<WorkspaceSystemGraphResponse> {
+  return apiGet<WorkspaceSystemGraphResponse>(
+    "/api/workspace/system-graph",
+    undefined,
+    fetchOptions,
+  );
+}
+
+/**
+ * Cross-repo blast radius from a service node (or repo alias): the downstream
+ * services impacted if it changes, ranked by impact. Reads the same system
+ * graph the map renders.
+ */
+export async function getWorkspaceBlastRadius(opts: {
+  target: string;
+  maxDepth?: number;
+  includeBehavioral?: boolean;
+}): Promise<WorkspaceBlastRadiusResponse> {
+  const params: Record<string, string | number | boolean> = { target: opts.target };
+  if (opts.maxDepth != null) params.max_depth = opts.maxDepth;
+  if (opts.includeBehavioral != null) params.include_behavioral = opts.includeBehavioral;
+  return apiGet<WorkspaceBlastRadiusResponse>("/api/workspace/blast-radius", params);
+}
+
+/**
+ * Provider contract changes from the most recent update that break consumers
+ * across repos, with the impacted consumer files. Optionally filter by provider
+ * repo or severity.
+ */
+export async function getWorkspaceBreakingChanges(opts?: {
+  repo?: string;
+  severity?: "breaking" | "warning";
+}): Promise<WorkspaceBreakingChangesResponse> {
+  const params: Record<string, string> = {};
+  if (opts?.repo) params.repo = opts.repo;
+  if (opts?.severity) params.severity = opts.severity;
+  return apiGet<WorkspaceBreakingChangesResponse>("/api/workspace/breaking-changes", params);
+}
+
+/**
+ * Architecture conformance from the most recent update: dependency-rule
+ * violations + dependency cycles over the system graph. Optionally filter to
+ * findings involving one repo.
+ */
+export async function getWorkspaceConformance(opts?: {
+  repo?: string;
+}): Promise<WorkspaceConformanceResponse> {
+  const params: Record<string, string> = {};
+  if (opts?.repo) params.repo = opts.repo;
+  return apiGet<WorkspaceConformanceResponse>("/api/workspace/conformance", params);
+}
+
+export async function getWorkspaceArchitecture(): Promise<WorkspaceArchitectureResponse> {
+  return apiGet<WorkspaceArchitectureResponse>("/api/workspace/architecture");
 }
 
 /**

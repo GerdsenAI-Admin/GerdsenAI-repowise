@@ -64,6 +64,52 @@ unchanged files keep their findings across incremental runs.
 Use `diff_snapshots(history)` for a `TrendSummary`, or `recent_kpis(history,
 limit=10)` for the CLI / dashboard table.
 
+Per-file trajectory (same snapshots, the `{path: score}` map):
+
+- `file_score_series(history, path)` — oldest-first `FileTrendPoint`s,
+  skipping snapshots missing the file; `[]` below two points (silent on thin
+  history). Reused verbatim by the PR bot's in-comment sparkline.
+- `file_trend(history, path)` — wraps the series with `current` / `previous`
+  / `delta` and a `declining` flag (per-file mirror of the alerts above).
+
+## Per-file signals
+
+`signals.py` is the same kind of pure, state-free join: it consolidates the
+per-file signals we *already* compute and persist (git history + graph
+topology) into one captioned contract — no recompute, no new measurement.
+
+- `file_signals(git_meta, degrees)` returns a `FileSignals` grouped as
+  **Process** (`prior_defect_count`, `change_entropy_pct`, 90-day line churn,
+  `age_days`), **People** (recent vs all-time owner + commit share), and
+  **Topology** (`in_degree` / `out_degree`).
+- Honesty rule: a field is `None` ("no signal") only when its *source row* is
+  absent — never imputed. A git-tracked file with zero bug-fixes reports `0`
+  (a real, reassuring signal); a file with no git history reports `None` for
+  the whole process/people group. `change_entropy_pct` is normalized 0-1 → 0-100
+  to match the hotspot API contract.
+
+Mirrored as `FileSignals` in `@repowise-dev/types/health`; surfaced in the
+dashboard drawer, the file-page Health tab, the `/health/files/breakdown` +
+`files/{path}` endpoints, and the MCP `get_context(include=["health"])` block.
+
+## Churn × complexity
+
+`churn_complexity.py` is the same pure, state-free join in service of the
+"hotspot anatomy" scatter:
+
+- `churn_complexity_points(metrics, git_meta_by_path)` returns one
+  `ChurnComplexityPoint` per recently-changed file — `commit_count_90d` (churn
+  axis), `max_ccn` (complexity axis), `nloc` (dot size), `score` (dot color via
+  band), `churn_percentile` (tooltip context) — sorted by the churn × complexity
+  "danger product" so a capped caller keeps the worst offenders.
+- Honesty rule: a file is omitted when it has no recent churn (nothing to plot
+  on the x-axis); complexity is **never** a filter, so a high-churn, simple file
+  is kept as a valid bottom-right signal.
+
+Mirrored as `ChurnComplexityPoint` in `@repowise-dev/types/health`; served by
+`GET /health/churn-complexity` and rendered by `ChurnComplexityQuadrant` on the
+Hotspots & churn dashboard tab.
+
 ## Refactoring suggestions
 
 `suggestions.suggestion_for(biomarker_type)` returns the canonical, static
@@ -90,6 +136,11 @@ expose NLOC-weighted module aggregates and accept `module:foo` targets.
   Protocol from `biomarkers/base.py`. Twenty-six registered (see
   `biomarkers/registry.py` and `biomarkers/README.md` for the full list),
   plus three governance findings written by a separate additive pass.
+- `grading.py` — the presentation "currency" layer over the score: the 3
+  defect-backed bands (`band_for` — Alert `<4` / Warning `4–8` / Healthy `≥8`)
+  and the NLOC-weighted `distribution`. Single source of truth for the cutoffs
+  (mirrored in `@repowise-dev/types/health`). No letter grade — see
+  `docs/architecture/code-health.md` §20.
 
 Each sub-package has its own `README.md` covering inputs, outputs, and
 extension points.

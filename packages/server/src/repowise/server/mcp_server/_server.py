@@ -282,14 +282,26 @@ async def _lifespan(server: FastMCP):
 
         # Load cross-repo enricher (Phase 3 + 4)
         try:
+            from repowise.core.workspace.breaking_change import BREAKING_CHANGES_FILENAME
             from repowise.core.workspace.config import WORKSPACE_DATA_DIR
+            from repowise.core.workspace.conformance import CONFORMANCE_FILENAME
             from repowise.core.workspace.contracts import CONTRACTS_FILENAME
+            from repowise.core.workspace.system_graph import SYSTEM_GRAPH_FILENAME
             from repowise.server.mcp_server._enrichment import CrossRepoEnricher
 
             cross_repo_path = ws_root / WORKSPACE_DATA_DIR / "cross_repo_edges.json"
             contracts_path = ws_root / WORKSPACE_DATA_DIR / CONTRACTS_FILENAME
-            enricher = CrossRepoEnricher(cross_repo_path, contracts_path=contracts_path)
-            if enricher.has_data:
+            system_graph_path = ws_root / WORKSPACE_DATA_DIR / SYSTEM_GRAPH_FILENAME
+            breaking_changes_path = ws_root / WORKSPACE_DATA_DIR / BREAKING_CHANGES_FILENAME
+            conformance_path = ws_root / WORKSPACE_DATA_DIR / CONFORMANCE_FILENAME
+            enricher = CrossRepoEnricher(
+                cross_repo_path,
+                contracts_path=contracts_path,
+                system_graph_path=system_graph_path,
+                breaking_changes_path=breaking_changes_path,
+                conformance_path=conformance_path,
+            )
+            if enricher.has_data or enricher.has_system_graph:
                 _state._cross_repo_enricher = enricher
                 _log.info(
                     "Cross-repo enricher loaded: %d co-change edges, %d package deps, %d contract links",
@@ -391,9 +403,19 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 
 
-def create_mcp_server(repo_path: str | None = None) -> FastMCP:
-    """Create and return the MCP server instance, optionally scoped to a repo."""
+def create_mcp_server(
+    repo_path: str | None = None,
+    tools: str | list[str] | None = None,
+) -> FastMCP:
+    """Create and return the MCP server instance, optionally scoped to a repo.
+
+    ``tools`` is an optional surface override (an explicit allowlist, ``+``/``-``
+    deltas, or ``"all"``); when omitted the ``mcp.tools`` config block is used.
+    """
     _state._repo_path = repo_path
+    from repowise.server.mcp_server._tool_selection import apply_tool_selection
+
+    apply_tool_selection(mcp, repo_path=repo_path, override=tools)
     return mcp
 
 
@@ -401,9 +423,18 @@ def run_mcp(
     transport: str = "stdio",
     repo_path: str | None = None,
     port: int = 7338,
+    tools: str | list[str] | None = None,
 ) -> None:
-    """Run the MCP server with the specified transport."""
+    """Run the MCP server with the specified transport.
+
+    ``tools`` overrides which tools are advertised (see
+    :func:`repowise.server.mcp_server._tool_selection.apply_tool_selection`);
+    when omitted, the ``mcp.tools`` config block is honoured.
+    """
     _state._repo_path = repo_path
+    from repowise.server.mcp_server._tool_selection import apply_tool_selection
+
+    apply_tool_selection(mcp, repo_path=repo_path, override=tools)
 
     if transport == "sse":
         mcp.settings.port = port

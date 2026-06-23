@@ -11,12 +11,15 @@ import json
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from repowise.core.analysis.health.churn_complexity import churn_complexity_points
 from repowise.core.analysis.health.defect_accuracy import compute_defect_accuracy
+from repowise.core.analysis.health.grading import band_for
+from repowise.core.analysis.health.grading import distribution as health_distribution
 from repowise.core.analysis.health.models import Severity
 from repowise.core.analysis.health.scoring import (
     CATEGORY_CAPS,
@@ -24,8 +27,14 @@ from repowise.core.analysis.health.scoring import (
     biomarker_weight,
     severity_deduction,
 )
+from repowise.core.analysis.health.signals import FileSignals, file_signals
 from repowise.core.analysis.health.suggestions import suggestion_for as _suggestion_for
-from repowise.core.analysis.health.trends import diff_snapshots, recent_kpis
+from repowise.core.analysis.health.trends import (
+    FileTrend,
+    diff_snapshots,
+    file_trend,
+    recent_kpis,
+)
 from repowise.core.persistence import crud
 from repowise.core.persistence.models import WikiSymbol
 from repowise.server.deps import get_db_session, verify_api_key
@@ -56,7 +65,16 @@ def _finding_to_dict(f: Any) -> dict:
         "reason": f.reason,
         "details": details,
         "status": f.status,
+        # Pillar the finding homes under (defect / maintainability / performance)
+        # so the UI can filter findings per dimension. Defaults to defect for
+        # rows that predate the split.
+        "dimension": getattr(f, "dimension", None) or "defect",
     }
+
+
+def _round_opt(v: Any) -> float | None:
+    """Round a nullable per-dimension score, preserving ``None`` (not measured)."""
+    return round(v, 2) if v is not None else None
 
 
 def _metric_to_dict(m: Any) -> dict:
@@ -70,7 +88,70 @@ def _metric_to_dict(m: Any) -> dict:
         "line_coverage_pct": m.line_coverage_pct,
         "module": m.module,
         "duplication_pct": getattr(m, "duplication_pct", None),
+        # Per-dimension scores from the three-signal split. ``score`` above stays
+        # the overall surfaced number (== defect_score for now).
+        # ``performance_score`` is computed but not yet surfaced as its own pillar.
+        "defect_score": _round_opt(getattr(m, "defect_score", None)),
+        "maintainability_score": _round_opt(getattr(m, "maintainability_score", None)),
+        "performance_score": _round_opt(getattr(m, "performance_score", None)),
     }
+
+
+def _file_trend_to_dict(t: FileTrend) -> dict:
+    """Wire shape for ``FileHealthTrend`` (types/health.ts). ``points`` is
+    empty on thin history so the UI shows a "no history yet" state."""
+    return {
+        "file_path": t.file_path,
+        "points": [
+            {
+                "taken_at": p.taken_at.isoformat() if p.taken_at else None,
+                "score": round(p.score, 2),
+            }
+            for p in t.points
+        ],
+        "current": t.current,
+        "previous": t.previous,
+        "delta": t.delta,
+        "declining": t.declining,
+        "snapshot_count": t.snapshot_count,
+    }
+
+
+def _file_signals_to_dict(s: FileSignals) -> dict:
+    """Wire shape for ``FileSignals`` (types/health.ts). Each value is null
+    when its source row is absent so the UI shows "no signal", never a
+    misleading zero. ``change_entropy_pct`` is 0-100 (the column is 0-1)."""
+    return {
+        "prior_defect_count": s.prior_defect_count,
+        "change_entropy_pct": s.change_entropy_pct,
+        "lines_added_90d": s.lines_added_90d,
+        "lines_deleted_90d": s.lines_deleted_90d,
+        "commit_count_90d": s.commit_count_90d,
+        "age_days": s.age_days,
+        "primary_owner_name": s.primary_owner_name,
+        "primary_owner_commit_pct": s.primary_owner_commit_pct,
+        "recent_owner_name": s.recent_owner_name,
+        "recent_owner_commit_pct": s.recent_owner_commit_pct,
+        "in_degree": s.in_degree,
+        "out_degree": s.out_degree,
+    }
+
+
+async def _load_file_signals(session: AsyncSession, repo_id: str, file_path: str) -> FileSignals:
+    """Join git metadata + graph degree for one file (read-only, no recompute).
+
+    Degree is read only when the file is a graph node so topology stays "no
+    signal" for files absent from the graph, rather than reporting a spurious
+    zero. Shared by the drawer breakdown and the file-detail aggregate.
+    """
+    git_meta = await crud.get_git_metadata(session, repo_id, file_path)
+    node = await crud.get_graph_node(session, repo_id, file_path)
+    degrees = (
+        await crud.get_node_degree_counts(session, repo_id, file_path)
+        if node is not None
+        else None
+    )
+    return file_signals(git_meta, degrees)
 
 
 async def _attach_symbol_ids(
@@ -88,22 +169,19 @@ async def _attach_symbol_ids(
     if not paths:
         return finding_dicts
     rows = (
-        (
-            await session.execute(
-                select(
-                    WikiSymbol.symbol_id,
-                    WikiSymbol.file_path,
-                    WikiSymbol.name,
-                    WikiSymbol.start_line,
-                    WikiSymbol.end_line,
-                ).where(
-                    WikiSymbol.repository_id == repo_id,
-                    WikiSymbol.file_path.in_(paths),
-                )
+        await session.execute(
+            select(
+                WikiSymbol.symbol_id,
+                WikiSymbol.file_path,
+                WikiSymbol.name,
+                WikiSymbol.start_line,
+                WikiSymbol.end_line,
+            ).where(
+                WikiSymbol.repository_id == repo_id,
+                WikiSymbol.file_path.in_(paths),
             )
         )
-        .all()
-    )
+    ).all()
     by_name: dict[tuple[str, str], str] = {}
     by_file: dict[str, list[tuple[int, int, str]]] = {}
     for symbol_id, file_path, name, start_line, end_line in rows:
@@ -216,11 +294,18 @@ async def health_overview(
         hotspot_health = round(float(latest.hotspot_health), 2)
         last_indexed_at = latest.taken_at.isoformat() if latest.taken_at else None
 
+    metric_dicts = [_metric_to_dict(m) for m in metrics]
+
+    # Repo-level band (from the NLOC-weighted average) + the per-band file
+    # distribution. Both derive purely from the existing score — no new data.
+    avg = summary.get("average_health")
     summary = {
         **summary,
         "hotspot_health": hotspot_health,
         "severity_breakdown": _severity_breakdown(findings),
+        "band": band_for(float(avg)) if avg is not None else None,
     }
+    distribution = health_distribution(metric_dicts)
 
     # "Does the score find the bugs?" self-validation, derived from the same
     # metrics + findings (prior_defect biomarker) already loaded above. ``None``
@@ -236,8 +321,9 @@ async def health_overview(
 
     return {
         "summary": summary,
+        "distribution": distribution,
         "defect_accuracy": defect_accuracy,
-        "files": [_metric_to_dict(m) for m in metrics[:limit]],
+        "files": metric_dicts[:limit],
         "top_findings": top_findings,
         "modules": _module_rollups(metrics),
         "biomarkers": _biomarker_breakdown(findings),
@@ -247,6 +333,112 @@ async def health_overview(
             "snapshot_count": len(snapshots),
         },
     }
+
+
+# Shields-compatible band colors. Named colors for the JSON endpoint (shields
+# resolves them) + hexes for the self-rendered SVG so it matches without a
+# round-trip to img.shields.io.
+_BADGE_COLOR_NAME: dict[str, str] = {
+    "healthy": "brightgreen",
+    "warning": "yellow",
+    "alert": "red",
+    "unknown": "lightgrey",
+}
+_BADGE_COLOR_HEX: dict[str, str] = {
+    "brightgreen": "#4c1",
+    "yellow": "#dfb317",
+    "red": "#e05d44",
+    "lightgrey": "#9f9f9f",
+}
+
+
+def _badge_fields(average_health: float | None) -> tuple[str, str, str, str]:
+    """Return ``(label, message, color_name, band)`` for the health badge."""
+    if average_health is None:
+        return "health", "no data", _BADGE_COLOR_NAME["unknown"], "unknown"
+    band = band_for(float(average_health))
+    return "health", f"{average_health:.1f}/10", _BADGE_COLOR_NAME[band], band
+
+
+def _render_badge_svg(label: str, message: str, color_name: str) -> str:
+    """Render a flat shields-style SVG so the badge needs no external service.
+
+    Char-width estimate matches shields' Verdana ~7px/char heuristic; exact
+    pixel fidelity isn't needed for a README badge.
+    """
+    hex_color = _BADGE_COLOR_HEX.get(color_name, "#9f9f9f")
+    lw = len(label) * 7 + 10
+    mw = len(message) * 7 + 10
+    total = lw + mw
+    lx = lw * 10 // 2
+    mx = (lw + mw // 2) * 10
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{total}" height="20" '
+        f'role="img" aria-label="{label}: {message}">'
+        f"<title>{label}: {message}</title>"
+        f'<linearGradient id="s" x2="0" y2="100%">'
+        f'<stop offset="0" stop-color="#bbb" stop-opacity=".1"/>'
+        f'<stop offset="1" stop-opacity=".1"/></linearGradient>'
+        f'<clipPath id="r"><rect width="{total}" height="20" rx="3" fill="#fff"/></clipPath>'
+        f'<g clip-path="url(#r)">'
+        f'<rect width="{lw}" height="20" fill="#555"/>'
+        f'<rect x="{lw}" width="{mw}" height="20" fill="{hex_color}"/>'
+        f'<rect width="{total}" height="20" fill="url(#s)"/></g>'
+        f'<g fill="#fff" text-anchor="middle" '
+        f'font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="110">'
+        f'<text x="{lx}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" '
+        f'textLength="{(lw - 10) * 10}">{label}</text>'
+        f'<text x="{lx}" y="140" transform="scale(.1)" textLength="{(lw - 10) * 10}">{label}</text>'
+        f'<text x="{mx}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" '
+        f'textLength="{(mw - 10) * 10}">{message}</text>'
+        f'<text x="{mx}" y="140" transform="scale(.1)" textLength="{(mw - 10) * 10}">{message}</text>'
+        f"</g></svg>"
+    )
+
+
+async def _badge_average_health(session: AsyncSession, repo_id: str) -> float | None:
+    repo = await crud.get_repository(session, repo_id)
+    if repo is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    summary = await crud.get_health_summary(session, repo_id)
+    avg = summary.get("average_health")
+    return float(avg) if avg is not None else None
+
+
+@router.get("/api/repos/{repo_id}/health/badge.json")
+async def health_badge_json(
+    repo_id: str,
+    session: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict:
+    """Shields.io endpoint-badge payload (color + ``N.N/10`` score, no letter).
+
+    Embed via ``https://img.shields.io/endpoint?url=<this-url>``.
+    """
+    avg = await _badge_average_health(session, repo_id)
+    label, message, color, band = _badge_fields(avg)
+    return {
+        "schemaVersion": 1,
+        "label": label,
+        "message": message,
+        "color": color,
+        "band": band,
+    }
+
+
+@router.get("/api/repos/{repo_id}/health/badge.svg")
+async def health_badge_svg(
+    repo_id: str,
+    session: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> Response:
+    """Self-rendered flat SVG health badge (no external service round-trip)."""
+    avg = await _badge_average_health(session, repo_id)
+    label, message, color, _band = _badge_fields(avg)
+    svg = _render_badge_svg(label, message, color)
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "max-age=300, public"},
+    )
 
 
 @router.get("/api/repos/{repo_id}/health/modules")
@@ -268,6 +460,7 @@ async def list_health_findings(
     biomarker_type: str | None = Query(None),
     file_path: str | None = Query(None),
     min_severity: str | None = Query(None),
+    dimension: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     session: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> list[dict]:
@@ -277,8 +470,11 @@ async def list_health_findings(
         biomarker_type=biomarker_type,
         file_path=file_path,
         min_severity=min_severity,
+        dimension=dimension,
     )
-    return await _attach_symbol_ids(session, repo_id, [_finding_to_dict(f) for f in findings[:limit]])
+    return await _attach_symbol_ids(
+        session, repo_id, [_finding_to_dict(f) for f in findings[:limit]]
+    )
 
 
 _SORT_FIELDS = {
@@ -460,13 +656,33 @@ async def file_score_breakdown(
     finding_dicts = await _attach_symbol_ids(
         session, repo_id, [_finding_to_dict(f) for f in findings]
     )
+    snapshots = await crud.list_health_snapshots(session, repo_id)
     return {
         "file_path": file_path,
         "metric": _metric_to_dict(metric) if metric else None,
         "breakdown": breakdown,
         "findings": finding_dicts,
         "suggestions": {b: _suggestion_for(b) for b in {f.biomarker_type for f in findings}},
+        "trend": _file_trend_to_dict(file_trend(snapshots, file_path)),
+        "signals": _file_signals_to_dict(await _load_file_signals(session, repo_id, file_path)),
     }
+
+
+@router.get("/api/repos/{repo_id}/health/files/trend")
+async def file_health_trend(
+    repo_id: str,
+    file_path: str = Query(..., description="File path to chart over time"),
+    session: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict:
+    """A single file's score-over-time series from the snapshot history.
+
+    Silent (empty ``points``) when fewer than two snapshots carry the file.
+    """
+    repo = await crud.get_repository(session, repo_id)
+    if repo is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    snapshots = await crud.list_health_snapshots(session, repo_id)
+    return _file_trend_to_dict(file_trend(snapshots, file_path))
 
 
 @router.get("/api/repos/{repo_id}/health/trend")
@@ -732,3 +948,40 @@ async def refactoring_targets(
     }
     targets.sort(key=sort_key_map[sort])
     return {"targets": targets[:limit], "total": len(targets)}
+
+
+def _churn_complexity_to_dict(p: Any) -> dict:
+    return {
+        "file_path": p.file_path,
+        "commit_count_90d": p.commit_count_90d,
+        "max_ccn": p.max_ccn,
+        "nloc": p.nloc,
+        "score": p.score,
+        "churn_percentile": p.churn_percentile,
+    }
+
+
+@router.get("/api/repos/{repo_id}/health/churn-complexity")
+async def churn_complexity(
+    repo_id: str,
+    limit: int = Query(300, ge=1, le=1000),
+    session: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict:
+    """Churn x complexity scatter points -- the "hotspot anatomy" danger-zone view.
+
+    One point per recently-changed file: x = 90-day commit count (churn),
+    y = max cyclomatic complexity, dot size = NLOC, color = health band. The
+    top-right corner is where churn and complexity collide -- the highest-value
+    refactoring targets, plotted instead of listed.
+    """
+    repo = await crud.get_repository(session, repo_id)
+    if repo is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    metrics = await crud.get_health_metrics(session, repo_id)
+    git_meta = await crud.get_all_git_metadata(session, repo_id)
+    points = churn_complexity_points(metrics, git_meta)
+    return {
+        "points": [_churn_complexity_to_dict(p) for p in points[:limit]],
+        "total": len(points),
+    }

@@ -22,7 +22,7 @@ export function CoChangeTable({ coChanges, compact }: CoChangeTableProps) {
       cellClassName: "min-w-[160px] max-w-[280px]",
       render: (cc) => (
         <div className="flex flex-col gap-0.5">
-          <Badge variant="default" className="w-fit text-[11px]">{cc.source_repo}</Badge>
+          <Badge variant="default" className="w-fit text-xs">{cc.source_repo}</Badge>
           <span className="text-xs font-mono text-[var(--color-text-secondary)] truncate block" title={cc.source_file}>
             {cc.source_file}
           </span>
@@ -36,7 +36,7 @@ export function CoChangeTable({ coChanges, compact }: CoChangeTableProps) {
       cellClassName: "min-w-[160px] max-w-[280px]",
       render: (cc) => (
         <div className="flex flex-col gap-0.5">
-          <Badge variant="default" className="w-fit text-[11px]">{cc.target_repo}</Badge>
+          <Badge variant="default" className="w-fit text-xs">{cc.target_repo}</Badge>
           <span className="text-xs font-mono text-[var(--color-text-secondary)] truncate block" title={cc.target_file}>
             {cc.target_file}
           </span>
@@ -45,7 +45,15 @@ export function CoChangeTable({ coChanges, compact }: CoChangeTableProps) {
     },
     {
       key: "strength",
-      header: "Strength",
+      header: (
+        <span
+          title="Relative, recency-weighted frequency of same-author commits across these repos. Higher means more or more-recent shared activity. It is not a percentage or a verified dependency."
+          className="cursor-help underline decoration-dotted underline-offset-2"
+        >
+          Strength
+        </span>
+      ),
+      mobileLabel: "Strength",
       priority: 2,
       headerClassName: "w-32",
       render: (cc) => (
